@@ -1,0 +1,100 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../lib/generated/prisma"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ── Cartes YGOProDeck ────────────────────────────────────────────────────────
+
+model Card {
+  id           Int       @id // ID YGOProDeck (pas autoincrement)
+  name         String
+  type         String
+  frameType    String    @default("")
+  description  String    @default("")
+  atk          Int?
+  def          Int?
+  level        Int?
+  race         String    @default("")
+  attribute    String?
+  imageUrl     String    // URL distante YGOProDeck
+  hasLocalImage Boolean  @default(false)
+  updatedAt    DateTime  @updatedAt
+
+  cardSets        CardSet[]
+  watchlistEntries WatchlistEntry[]
+
+  @@index([name])
+}
+
+// Chaque ligne = combinaison unique (carte × édition × rareté)
+// Source : card_sets[] de l'API YGOProDeck
+model CardSet {
+  id           Int    @id @default(autoincrement())
+  cardId       Int
+  setName      String // ex: "Legend of Blue Eyes White Dragon"
+  setCode      String // ex: "LOB-EN001"
+  setRarity    String // ex: "Ultra Rare"
+  setRarityCode String @default("") // ex: "UR"
+
+  card Card @relation(fields: [cardId], references: [id], onDelete: Cascade)
+
+  @@unique([cardId, setCode, setRarity]) // une entrée par carte+code+rareté
+  @@index([cardId])
+  @@index([setName])
+}
+
+// ── Vendeurs CardMarket ──────────────────────────────────────────────────────
+
+model Seller {
+  id              Int      @id @default(autoincrement())
+  name            String   @unique // pseudo CardMarket
+  shippingProfile String   @default("cardmarket-fr-standard")
+  createdAt       DateTime @default(now())
+
+  prices Price[]
+}
+
+// ── Watchlist (tableau de recherche) ────────────────────────────────────────
+
+model WatchlistEntry {
+  id        Int      @id @default(autoincrement())
+  deck      String   @default("")
+  cardId    Int
+  quantity  Int      @default(1)
+  setName   String?  // édition choisie (optionnel)
+  rarity    String?  // rareté choisie (optionnel)
+  status    String   @default("") // "" | "À commander" | "Commandé" | "Reçu"
+  notes     String   @default("")
+  sortOrder Int      @default(0) // ordre des lignes
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  card   Card    @relation(fields: [cardId], references: [id])
+  prices Price[]
+
+  @@index([cardId])
+}
+
+// ── Prix par vendeur ─────────────────────────────────────────────────────────
+
+model Price {
+  id                  Int       @id @default(autoincrement())
+  watchlistEntryId    Int
+  sellerId            Int
+  price               Float?    // null = pas encore renseigné
+  previousPrice       Float?    // valeur avant la dernière mise à jour
+  previousUpdatedAt   DateTime? // date de l'ancienne valeur
+  updatedAt           DateTime  @updatedAt
+
+  watchlistEntry WatchlistEntry @relation(fields: [watchlistEntryId], references: [id], onDelete: Cascade)
+  seller         Seller         @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+
+  @@unique([watchlistEntryId, sellerId]) // un prix par (ligne × vendeur)
+  @@index([watchlistEntryId])
+  @@index([sellerId])
+}
