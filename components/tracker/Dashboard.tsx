@@ -13,6 +13,11 @@ function bestPrice(entry: WatchlistEntry): number | null {
   return prices.length > 0 ? Math.min(...prices) : null;
 }
 
+function previousBestPrice(entry: WatchlistEntry): number | null {
+  const prices = entry.prices.map((p) => p.previousPrice).filter((p): p is number => p !== null);
+  return prices.length > 0 ? Math.min(...prices) : null;
+}
+
 function bestSellerIdFn(entry: WatchlistEntry): number | null {
   let minPrice: number | null = null;
   let minSellerId: number | null = null;
@@ -29,13 +34,17 @@ function computeStats(entries: WatchlistEntry[]) {
   const total = entries.length;
   const byStatus: Record<string, number> = { "À commander": 0, "Commandé": 0, "Reçu": 0, "": 0 };
   let minCost = 0;
+  let previousMinCost = 0;
+  let hasPreviousCost = false;
   let coverage = 0;
   for (const e of entries) {
     byStatus[e.status] = (byStatus[e.status] ?? 0) + 1;
     const bp = bestPrice(e);
     if (bp !== null) { minCost += bp * e.quantity; coverage++; }
+    const pbp = previousBestPrice(e);
+    if (pbp !== null) { previousMinCost += pbp * e.quantity; hasPreviousCost = true; }
   }
-  return { total, byStatus, minCost, coverage };
+  return { total, byStatus, minCost, previousMinCost: hasPreviousCost ? previousMinCost : null, coverage };
 }
 
 function computeTopCards(entries: WatchlistEntry[], n = 5) {
@@ -74,8 +83,8 @@ function dominantSeller(entries: WatchlistEntry[], sellers: Seller[]): Seller | 
 
 // ── Stat card ─────────────────────────────────────────────────────────────
 
-function StatCard({ label, value, sub, accent = false }: {
-  label: string; value: string; sub?: string; accent?: boolean;
+function StatCard({ label, value, sub, accent = false, delta }: {
+  label: string; value: string; sub?: string; accent?: boolean; delta?: number;
 }) {
   return (
     <div className={cn(
@@ -90,7 +99,17 @@ function StatCard({ label, value, sub, accent = false }: {
       <span className={cn("text-2xl font-bold tabular-nums leading-none", accent ? "text-gold" : "text-foreground")}>
         {value}
       </span>
-      {sub && <span className="text-[11px] text-muted-foreground/50">{sub}</span>}
+      <div className="flex items-center gap-2 flex-wrap">
+        {sub && <span className="text-[11px] text-muted-foreground/50">{sub}</span>}
+        {delta !== undefined && delta !== 0 && (
+          <span className={cn(
+            "text-[11px] font-semibold tabular-nums",
+            delta < 0 ? "text-emerald-400" : "text-amber-400"
+          )}>
+            {delta < 0 ? "↓" : "↑"} {delta < 0 ? "−" : "+"}€{Math.abs(delta).toFixed(2)}
+          </span>
+        )}
+      </div>
     </div>
   );
 }
@@ -216,7 +235,8 @@ const RANK_COLORS = ["text-gold", "text-zinc-400", "text-amber-700/80"];
 
 export function Dashboard({ entries, sellers }: DashboardProps) {
   const validEntries = useMemo(() => entries.filter((e) => e.card), [entries]);
-  const { total, byStatus, minCost, coverage } = useMemo(() => computeStats(validEntries), [validEntries]);
+  const { total, byStatus, minCost, previousMinCost, coverage } = useMemo(() => computeStats(validEntries), [validEntries]);
+  const costDelta = previousMinCost !== null ? minCost - previousMinCost : undefined;
   const topCards = useMemo(() => computeTopCards(validEntries), [validEntries]);
   const sellerSummary = useMemo(() => computeSellerSummary(validEntries, sellers), [validEntries, sellers]);
   const deckGroups = useMemo(() => {
@@ -274,8 +294,13 @@ export function Dashboard({ entries, sellers }: DashboardProps) {
                   <span className="text-xs font-semibold tabular-nums">{globalPct}% reçu</span>
                 </div>
               )}
-              <div className="px-2.5 py-1.5 rounded-full border border-gold/20 bg-gold/8 text-gold text-xs font-medium tabular-nums">
+              <div className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-full border border-gold/20 bg-gold/8 text-gold text-xs font-medium tabular-nums">
                 €{minCost.toFixed(2)} estimés
+                {costDelta !== undefined && costDelta !== 0 && (
+                  <span className={cn("text-[10px] font-bold", costDelta < 0 ? "text-emerald-400" : "text-amber-400")}>
+                    {costDelta < 0 ? "↓" : "↑"}
+                  </span>
+                )}
               </div>
             </div>
           </div>
@@ -299,6 +324,7 @@ export function Dashboard({ entries, sellers }: DashboardProps) {
                 value={`€${minCost.toFixed(2)}`}
                 sub="meilleur prix / ligne"
                 accent
+                delta={costDelta}
               />
             </div>
           </div>

@@ -1,8 +1,8 @@
 "use client";
 
-import { useState, useCallback, useRef, useEffect, useMemo, Fragment } from "react";
+import { useState, useCallback, useRef, useEffect, useMemo, Fragment, forwardRef, useImperativeHandle } from "react";
 import Image from "next/image";
-import { Plus, Trash2, Users, RefreshCw, X, ExternalLink, Search, Download, Upload, Pencil, ShoppingCart, LayoutDashboard } from "lucide-react";
+import { Plus, Trash2, Users, RefreshCw, X, ExternalLink, Search, Download, Upload, Pencil, ShoppingCart, LayoutDashboard, DatabaseBackup } from "lucide-react";
 import {
   Select,
   SelectContent,
@@ -141,19 +141,23 @@ function formatDaysAgo(dateStr: string): string {
   return `il y a ${days} j`;
 }
 
-function PriceCell({
-  price,
-  previousPrice = null,
-  previousUpdatedAt = null,
-  onSave,
-  isBest = false,
-}: {
+type PriceCellHandle = { focusAndEdit: () => void };
+
+const PriceCell = forwardRef<PriceCellHandle, {
   price: number | null;
   previousPrice?: number | null;
   previousUpdatedAt?: string | null;
   onSave: (v: number | null) => void;
   isBest?: boolean;
-}) {
+  onNavigate?: (dir: "next" | "prev") => void;
+}>(function PriceCell({
+  price,
+  previousPrice = null,
+  previousUpdatedAt = null,
+  onSave,
+  isBest = false,
+  onNavigate,
+}, ref) {
   const [editing, setEditing] = useState(false);
   const [raw, setRaw] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
@@ -163,6 +167,8 @@ function PriceCell({
     setEditing(true);
     setTimeout(() => inputRef.current?.select(), 0);
   };
+
+  useImperativeHandle(ref, () => ({ focusAndEdit: startEdit }));
 
   const commit = () => {
     const num = parseFloat(raw.replace(",", "."));
@@ -182,6 +188,12 @@ function PriceCell({
         onChange={(e) => setRaw(e.target.value)}
         onBlur={commit}
         onKeyDown={(e) => {
+          if (e.key === "Tab") {
+            e.preventDefault();
+            commit();
+            onNavigate?.(e.shiftKey ? "prev" : "next");
+            return;
+          }
           if (e.key === "Enter") commit();
           if (e.key === "Escape") setEditing(false);
         }}
@@ -235,7 +247,7 @@ function PriceCell({
       )}
     </button>
   );
-}
+});
 
 // ── Helper : meilleur vendeur par ligne ──────────────────────────────────
 
@@ -360,6 +372,7 @@ export function TrackerClient({ initialEntries, initialSellers }: TrackerClientP
   const [entries, setEntries] = useState<WatchlistEntry[]>(initialEntries);
   const [sellers, setSellers] = useState<Seller[]>(initialSellers);
   const [uiError, setUiError] = useState("");
+  const [duplicateWarning, setDuplicateWarning] = useState("");
   const [pending, setPending] = useState<PendingEntry | null>(null);
   const [editing, setEditing] = useState<EditingCell | null>(null);
   const [editValue, setEditValue] = useState("");
@@ -371,6 +384,12 @@ export function TrackerClient({ initialEntries, initialSellers }: TrackerClientP
   const [filterDeck, setFilterDeck] = useState("");
   const [filterName, setFilterName] = useState("");
   const [filterStatus, setFilterStatus] = useState("");
+  const [renamingDeck, setRenamingDeck] = useState(false);
+  const [renameValue, setRenameValue] = useState("");
+  const renameInputRef = useRef<HTMLInputElement>(null);
+  const [restoring, setRestoring] = useState(false);
+  const [restoreResult, setRestoreResult] = useState<{ entries: number; prices: number } | null>(null);
+  const restoreFileRef = useRef<HTMLInputElement>(null);
   const [sort, setSort] = useState<SortConfig>(null);
   const [groupByDeck, setGroupByDeck] = useState(false);
   const [view, setView] = useState<"table" | "plan" | "dashboard">("table");
@@ -494,6 +513,18 @@ export function TrackerClient({ initialEntries, initialSellers }: TrackerClientP
     });
   }, [filteredEntries, sort]);
 
+  // ── Navigation clavier entre cellules prix ───────────────────────────────
+  const priceCellRefs = useRef<Map<string, PriceCellHandle>>(new Map());
+
+  const handlePriceNavigate = useCallback((entryId: number, sellerId: number, dir: "next" | "prev") => {
+    const idx = sortedEntries.findIndex((e) => e.id === entryId);
+    if (idx === -1) return;
+    const targetIdx = dir === "next" ? idx + 1 : idx - 1;
+    if (targetIdx < 0 || targetIdx >= sortedEntries.length) return;
+    const targetEntry = sortedEntries[targetIdx];
+    priceCellRefs.current.get(`${targetEntry.id}-${sellerId}`)?.focusAndEdit();
+  }, [sortedEntries]);
+
   const showError = useCallback((error: unknown, fallback: string) => {
     setUiError(error instanceof Error ? error.message : fallback);
   }, []);
@@ -556,6 +587,30 @@ export function TrackerClient({ initialEntries, initialSellers }: TrackerClientP
       showError(error, "Erreur lors de la mise à jour");
     });
   }, [showError, updateEntry]);
+
+  const renameDeck = useCallback(async (oldName: string, newName: string) => {
+    const trimmed = newName.trim();
+    if (!trimmed || trimmed === oldName) { setRenamingDeck(false); return; }
+    const targets = entries.filter((e) => e.deck === oldName);
+    // Optimistic update
+    setEntries((prev) => prev.map((e) => e.deck === oldName ? { ...e, deck: trimmed } : e));
+    setFilterDeck(trimmed);
+    setRenamingDeck(false);
+    try {
+      await Promise.all(targets.map((e) =>
+        fetch(`/api/watchlist/${e.id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ deck: trimmed }),
+        })
+      ));
+    } catch (err) {
+      showError(err, "Erreur lors du renommage du deck");
+      // Rollback
+      setEntries((prev) => prev.map((e) => e.deck === trimmed && targets.some((t) => t.id === e.id) ? { ...e, deck: oldName } : e));
+      setFilterDeck(oldName);
+    }
+  }, [entries, showError]);
 
   const startEditNote = useCallback((id: number, current: string) => {
     setEditingNote(id);
@@ -674,6 +729,18 @@ export function TrackerClient({ initialEntries, initialSellers }: TrackerClientP
       const deck = pending?.deck ?? "";
       const quantity = pending?.quantity ?? 1;
       setPending(null);
+
+      // Détection de doublons
+      const duplicates = entries.filter((e) => e.cardId === card.id);
+      if (duplicates.length > 0) {
+        const locations = duplicates
+          .map((e) => e.deck ? `"${e.deck}"` : "sans deck")
+          .join(", ");
+        setDuplicateWarning(`"${card.name}" est déjà dans la watchlist (${locations}). La carte a quand même été ajoutée.`);
+      } else {
+        setDuplicateWarning("");
+      }
+
       try {
         await addEntry(deck, card.id, quantity);
       } catch (error) {
@@ -681,7 +748,7 @@ export function TrackerClient({ initialEntries, initialSellers }: TrackerClientP
         showError(error, "Erreur lors de l'ajout de la carte");
       }
     },
-    [pending, addEntry, showError]
+    [pending, entries, addEntry, showError]
   );
 
   // ── Inline edit helpers ────────────────────────────────────────────────
@@ -767,6 +834,115 @@ export function TrackerClient({ initialEntries, initialSellers }: TrackerClientP
     URL.revokeObjectURL(url);
   }, [validEntries, sellers]);
 
+  // ── Backup JSON ────────────────────────────────────────────────────────
+
+  const exportBackup = useCallback(() => {
+    const data = {
+      exportedAt: new Date().toISOString(),
+      version: 1,
+      sellers: sellers.map((s) => ({ id: s.id, name: s.name, shippingProfile: s.shippingProfile })),
+      entries: validEntries.map((e) => ({
+        cardId: e.cardId,
+        cardName: e.card.name,
+        deck: e.deck,
+        quantity: e.quantity,
+        setName: e.setName ?? null,
+        rarity: e.rarity ?? null,
+        status: e.status,
+        notes: e.notes,
+        prices: e.prices
+          .filter((p) => p.price !== null)
+          .map((p) => ({ sellerId: p.sellerId, price: p.price })),
+      })),
+    };
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `ygo-backup-${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }, [validEntries, sellers]);
+
+  const handleRestoreFile = useCallback(async (file: File) => {
+    setRestoring(true);
+    setRestoreResult(null);
+    try {
+      const data = JSON.parse(await file.text());
+      if (!Array.isArray(data.entries)) throw new Error("Format invalide");
+
+      // Étape 1 — Résoudre les vendeurs (nom → ID courant)
+      const sellerIdMap = new Map<number, number>();
+      for (const bs of data.sellers ?? []) {
+        const existing = sellers.find((s) => s.name === bs.name);
+        if (existing) {
+          sellerIdMap.set(bs.id, existing.id);
+        } else {
+          const res = await fetch("/api/sellers", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ name: bs.name }),
+          });
+          if (res.ok) {
+            const newSeller: Seller = await res.json();
+            setSellers((prev) => [...prev, newSeller]);
+            sellerIdMap.set(bs.id, newSeller.id);
+          }
+        }
+      }
+
+      // Étape 2 — Créer les entrées + prix
+      let entriesCount = 0;
+      let pricesCount = 0;
+      for (const e of data.entries) {
+        const res = await fetch("/api/watchlist", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            cardId: e.cardId,
+            deck: e.deck ?? "",
+            quantity: e.quantity ?? 1,
+            setName: e.setName ?? null,
+            rarity: e.rarity ?? null,
+            status: e.status ?? "",
+            notes: e.notes ?? "",
+          }),
+        });
+        if (!res.ok) continue;
+        const newEntry: WatchlistEntry = await res.json();
+        setEntries((prev) => [...prev, newEntry]);
+        entriesCount++;
+
+        for (const p of e.prices ?? []) {
+          if (p.price == null) continue;
+          const currentSellerId = sellerIdMap.get(p.sellerId);
+          if (!currentSellerId) continue;
+          const pRes = await fetch("/api/prices", {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ watchlistEntryId: newEntry.id, sellerId: currentSellerId, price: p.price }),
+          });
+          if (pRes.ok) {
+            const saved = await pRes.json();
+            setEntries((prev) => prev.map((en) =>
+              en.id === newEntry.id
+                ? { ...en, prices: en.prices.map((pr) => pr.sellerId === currentSellerId ? { ...pr, price: saved.price } : pr) }
+                : en
+            ));
+            pricesCount++;
+          }
+        }
+      }
+
+      setRestoreResult({ entries: entriesCount, prices: pricesCount });
+    } catch (err) {
+      showError(err, "Erreur lors de la restauration du backup");
+    } finally {
+      setRestoring(false);
+      if (restoreFileRef.current) restoreFileRef.current.value = "";
+    }
+  }, [sellers, showError]);
+
   // ── Render ─────────────────────────────────────────────────────────────
 
   const thClass =
@@ -834,7 +1010,19 @@ export function TrackerClient({ initialEntries, initialSellers }: TrackerClientP
       {/* Carte + Note */}
       <td className={`${tdClass} w-[240px]`}>
         <div className="flex flex-col gap-1.5 py-1.5">
-          <div className="text-sm font-semibold text-foreground/95 truncate px-2 leading-tight">{entry.card.name}</div>
+          <div className="flex items-center gap-1 px-2 min-w-0">
+            <span className="text-sm font-semibold text-foreground/95 truncate leading-tight flex-1">{entry.card.name}</span>
+            <a
+              href={`https://www.cardmarket.com/fr/YuGiOh/Products/Singles?searchString=${encodeURIComponent(entry.card.name)}${entry.setName ? `&expansionName=${encodeURIComponent(entry.setName)}` : ""}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              title="Rechercher sur CardMarket"
+              onClick={(e) => e.stopPropagation()}
+              className="flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground/50 hover:text-gold p-0.5 rounded"
+            >
+              <ExternalLink className="w-3 h-3" />
+            </a>
+          </div>
           <div className="px-2">
             <StatusBadge
               status={entry.status}
@@ -951,6 +1139,11 @@ export function TrackerClient({ initialEntries, initialSellers }: TrackerClientP
           return (
             <td key={seller.id} className={`${tdClass} w-[110px]`}>
               <PriceCell
+                ref={(el) => {
+                  const key = `${entry.id}-${seller.id}`;
+                  if (el) priceCellRefs.current.set(key, el);
+                  else priceCellRefs.current.delete(key);
+                }}
                 price={priceData?.price ?? null}
                 previousPrice={priceData?.previousPrice ?? null}
                 previousUpdatedAt={priceData?.previousUpdatedAt ?? null}
@@ -960,6 +1153,7 @@ export function TrackerClient({ initialEntries, initialSellers }: TrackerClientP
                     showError(error, "Erreur lors de la mise à jour du prix");
                   });
                 }}
+                onNavigate={(dir) => handlePriceNavigate(entry.id, seller.id, dir)}
               />
             </td>
           );
@@ -1082,6 +1276,28 @@ export function TrackerClient({ initialEntries, initialSellers }: TrackerClientP
             Watchlist CSV
           </button>
           <button
+            onClick={exportBackup}
+            disabled={entries.length === 0}
+            title="Exporter un backup JSON complet"
+            className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground
+                       transition-colors px-3 py-1.5 rounded-full border border-border/60 bg-card/70 hover:bg-surface-raised disabled:opacity-30
+                       disabled:cursor-not-allowed min-h-8 basis-[calc(50%-0.25rem)] justify-center sm:basis-auto"
+          >
+            <DatabaseBackup className="w-3.5 h-3.5" />
+            Backup
+          </button>
+          <button
+            onClick={() => restoreFileRef.current?.click()}
+            disabled={restoring}
+            title="Restaurer depuis un backup JSON"
+            className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground
+                       transition-colors px-3 py-1.5 rounded-full border border-border/60 bg-card/70 hover:bg-surface-raised disabled:opacity-50
+                       disabled:cursor-not-allowed min-h-8 basis-[calc(50%-0.25rem)] justify-center sm:basis-auto"
+          >
+            <Upload className="w-3.5 h-3.5" />
+            {restoring ? "Restauration…" : "Restaurer"}
+          </button>
+          <button
             onClick={triggerSync}
             disabled={syncing}
             title="Synchroniser la base YGOProDeck"
@@ -1165,6 +1381,24 @@ export function TrackerClient({ initialEntries, initialSellers }: TrackerClientP
               CSV
             </button>
             <button
+              onClick={exportBackup}
+              disabled={entries.length === 0}
+              title="Exporter un backup JSON complet"
+              className="shrink-0 flex min-h-8 items-center justify-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors px-3 py-1.5 rounded-full border border-border/60 bg-card/70 hover:bg-surface-raised disabled:opacity-30 disabled:cursor-not-allowed"
+            >
+              <DatabaseBackup className="w-3.5 h-3.5" />
+              Backup
+            </button>
+            <button
+              onClick={() => restoreFileRef.current?.click()}
+              disabled={restoring}
+              title="Restaurer depuis un backup JSON"
+              className="shrink-0 flex min-h-8 items-center justify-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors px-3 py-1.5 rounded-full border border-border/60 bg-card/70 hover:bg-surface-raised disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <Upload className="w-3.5 h-3.5" />
+              {restoring ? "…" : "Restaurer"}
+            </button>
+            <button
               onClick={triggerSync}
               disabled={syncing}
               title="Synchroniser la base YGOProDeck"
@@ -1197,6 +1431,18 @@ export function TrackerClient({ initialEntries, initialSellers }: TrackerClientP
         </div>
       )}
 
+      {duplicateWarning && (
+        <div className="flex-none border-b border-yellow-700/25 bg-yellow-950/30 px-4 py-2 flex items-center justify-between gap-3">
+          <p className="text-xs text-yellow-200/80">⚠ {duplicateWarning}</p>
+          <button
+            onClick={() => setDuplicateWarning("")}
+            className="text-[11px] text-yellow-200/50 hover:text-yellow-100 transition-colors"
+          >
+            Fermer
+          </button>
+        </div>
+      )}
+
       {/* ── Vue dashboard ───────────────────────────────────────────────── */}
       {view === "dashboard" && <Dashboard entries={entries} sellers={sellers} />}
 
@@ -1214,20 +1460,50 @@ export function TrackerClient({ initialEntries, initialSellers }: TrackerClientP
             <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-gold/70">Filtres</div>
             <div className="hidden text-[11px] text-muted-foreground/45 sm:block">Affinage instantané de la watchlist</div>
           </div>
-          <Select
-            value={filterDeck || "_all"}
-            onValueChange={(v) => setFilterDeck(v === "_all" ? "" : (v ?? ""))}
-          >
-            <SelectTrigger className="h-8 text-xs w-full sm:w-[170px] rounded-xl border-border/60 bg-surface shadow-none focus:ring-0">
-              <SelectValue placeholder="Tous les decks" />
-            </SelectTrigger>
-            <SelectContent className="bg-popover border-border text-xs max-h-60">
-              <SelectItem value="_all" className="text-xs text-muted-foreground">Tous les decks</SelectItem>
-              {deckOptions.map((d) => (
-                <SelectItem key={d} value={d} className="text-xs">{d}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <div className="flex items-center gap-1 w-full sm:w-auto">
+            {renamingDeck ? (
+              <input
+                ref={renameInputRef}
+                autoFocus
+                value={renameValue}
+                onChange={(e) => setRenameValue(e.target.value)}
+                onBlur={() => renameDeck(filterDeck, renameValue)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") renameDeck(filterDeck, renameValue);
+                  if (e.key === "Escape") setRenamingDeck(false);
+                }}
+                className="h-8 text-xs px-3 rounded-xl border border-gold/50 bg-surface outline-none
+                           focus:border-gold/80 text-foreground w-full sm:w-[170px] transition-colors"
+                placeholder="Nouveau nom…"
+              />
+            ) : (
+              <Select
+                value={filterDeck || "_all"}
+                onValueChange={(v) => { setFilterDeck(v === "_all" ? "" : (v ?? "")); setRenamingDeck(false); }}
+              >
+                <SelectTrigger className="h-8 text-xs w-full sm:w-[170px] rounded-xl border-border/60 bg-surface shadow-none focus:ring-0">
+                  <SelectValue placeholder="Tous les decks" />
+                </SelectTrigger>
+                <SelectContent className="bg-popover border-border text-xs max-h-60">
+                  <SelectItem value="_all" className="text-xs text-muted-foreground">Tous les decks</SelectItem>
+                  {deckOptions.map((d) => (
+                    <SelectItem key={d} value={d} className="text-xs">{d}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
+            {filterDeck && !renamingDeck && (
+              <button
+                onClick={() => { setRenameValue(filterDeck); setRenamingDeck(true); }}
+                title="Renommer ce deck"
+                className="flex-shrink-0 h-8 w-8 flex items-center justify-center rounded-xl
+                           border border-border/60 bg-surface text-muted-foreground/50
+                           hover:text-gold hover:border-gold/40 transition-colors"
+              >
+                <Pencil className="w-3 h-3" />
+              </button>
+            )}
+          </div>
 
           <div className="relative w-full sm:w-auto">
             <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3 h-3 text-muted-foreground/40 pointer-events-none" />
@@ -1718,6 +1994,33 @@ export function TrackerClient({ initialEntries, initialSellers }: TrackerClientP
         onClose={() => setImportDialog(false)}
         onImported={handleImported}
       />
+
+      {/* ── Input fichier backup (caché) ─────────────────────────────────── */}
+      <input
+        ref={restoreFileRef}
+        type="file"
+        accept=".json"
+        className="hidden"
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          if (file) handleRestoreFile(file);
+        }}
+      />
+
+      {/* ── Bandeau résultat restauration ───────────────────────────────── */}
+      {restoreResult && (
+        <div className="fixed bottom-4 right-4 z-50 flex items-center gap-3 px-4 py-3 rounded-xl
+                        bg-emerald-950/90 border border-emerald-700/40 shadow-xl backdrop-blur-sm">
+          <DatabaseBackup className="w-4 h-4 text-emerald-400 flex-shrink-0" />
+          <span className="text-sm text-emerald-200">
+            Restauration terminée — <span className="font-semibold">{restoreResult.entries} cartes</span>
+            {restoreResult.prices > 0 && <>, <span className="font-semibold">{restoreResult.prices} prix</span></>} importés
+          </span>
+          <button onClick={() => setRestoreResult(null)} className="text-emerald-400/60 hover:text-emerald-200 transition-colors ml-1">
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
     </div>
   );
 }
