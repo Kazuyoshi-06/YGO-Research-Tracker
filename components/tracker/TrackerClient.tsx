@@ -160,6 +160,7 @@ const PriceCell = forwardRef<PriceCellHandle, {
 }, ref) {
   const [editing, setEditing] = useState(false);
   const [raw, setRaw] = useState("");
+  const [justSaved, setJustSaved] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const startEdit = () => {
@@ -172,8 +173,13 @@ const PriceCell = forwardRef<PriceCellHandle, {
 
   const commit = () => {
     const num = parseFloat(raw.replace(",", "."));
-    onSave(isNaN(num) || raw.trim() === "" ? null : num);
+    const newVal = isNaN(num) || raw.trim() === "" ? null : num;
+    onSave(newVal);
     setEditing(false);
+    if (newVal !== null) {
+      setJustSaved(true);
+      setTimeout(() => setJustSaved(false), 620);
+    }
   };
 
   const showVariation = price !== null && previousPrice !== null && previousPrice !== price;
@@ -212,7 +218,8 @@ const PriceCell = forwardRef<PriceCellHandle, {
         "relative group w-full h-full text-right text-xs tabular-nums px-2 py-1 rounded transition-colors",
         isBest
           ? "bg-emerald-900/25 text-emerald-300 hover:bg-emerald-900/40"
-          : "hover:bg-surface-raised text-foreground/90"
+          : "hover:bg-surface-raised text-foreground/90",
+        justSaved && "price-saved"
       )}
     >
       {price != null ? (
@@ -390,6 +397,7 @@ export function TrackerClient({ initialEntries, initialSellers }: TrackerClientP
   const [restoring, setRestoring] = useState(false);
   const [restoreResult, setRestoreResult] = useState<{ entries: number; prices: number } | null>(null);
   const restoreFileRef = useRef<HTMLInputElement>(null);
+  const [newEntryId, setNewEntryId] = useState<number | null>(null);
   const [sort, setSort] = useState<SortConfig>(null);
   const [groupByDeck, setGroupByDeck] = useState(false);
   const [view, setView] = useState<"table" | "plan" | "dashboard">("table");
@@ -545,6 +553,8 @@ export function TrackerClient({ initialEntries, initialSellers }: TrackerClientP
 
     const entry: WatchlistEntry = await res.json();
     setEntries((prev) => [...prev, entry]);
+    setNewEntryId(entry.id);
+    setTimeout(() => setNewEntryId(null), 400);
 
     // Télécharge l'image en arrière-plan et met à jour l'état local
     fetch(`/api/cards/${cardId}/image`, { method: "POST" })
@@ -953,7 +963,7 @@ export function TrackerClient({ initialEntries, initialSellers }: TrackerClientP
     if (!entry.card) return null;
     const isSelected = selectedIds.has(entry.id);
     return (
-    <tr key={entry.id} className={cn("table-row-hover h-[84px] group", entry.status === "Reçu" && "opacity-35", isSelected && "!bg-gold/8 ring-inset ring-1 ring-gold/20")}>
+    <tr key={entry.id} className={cn("table-row-hover h-[84px] group", entry.status === "Reçu" && "opacity-35", isSelected && "!bg-gold/8 ring-inset ring-1 ring-gold/20", entry.id === newEntryId && "row-enter")}>
       {/* Checkbox */}
       <td className={`${tdClass} w-[36px] text-center`}>
         <input
@@ -1444,10 +1454,18 @@ export function TrackerClient({ initialEntries, initialSellers }: TrackerClientP
       )}
 
       {/* ── Vue dashboard ───────────────────────────────────────────────── */}
-      {view === "dashboard" && <Dashboard entries={entries} sellers={sellers} />}
+      {view === "dashboard" && (
+        <div key="dashboard" className="view-enter flex-1 flex flex-col min-h-0">
+          <Dashboard entries={entries} sellers={sellers} />
+        </div>
+      )}
 
       {/* ── Vue plan d'achat ────────────────────────────────────────────── */}
-      {view === "plan" && <PurchasePlan entries={entries} sellers={sellers} onMarkOrdered={markAsOrdered} />}
+      {view === "plan" && (
+        <div key="plan" className="view-enter flex-1 flex flex-col min-h-0">
+          <PurchasePlan entries={entries} sellers={sellers} onMarkOrdered={markAsOrdered} />
+        </div>
+      )}
 
       {/* ── Vue tableau ─────────────────────────────────────────────────── */}
       {view === "table" && (

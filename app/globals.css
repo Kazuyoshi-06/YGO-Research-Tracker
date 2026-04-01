@@ -232,6 +232,21 @@
   .stagger-fade-children > *:nth-child(4) { animation-delay: 160ms; }
   .stagger-fade-children > *:nth-child(5) { animation-delay: 200ms; }
   .stagger-fade-children > *:nth-child(6) { animation-delay: 240ms; }
+
+  /* Transition de vue (table ↔ plan ↔ dashboard) */
+  .view-enter {
+    animation: view-enter 200ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+
+  /* Flash vert confirmation prix sauvegardé */
+  .price-saved {
+    animation: price-flash 600ms ease-out both;
+  }
+
+  /* Fade-in d'une nouvelle ligne dans le tableau */
+  .row-enter {
+    animation: row-enter 320ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
 }
 
 @keyframes fade-in-up {
@@ -250,10 +265,28 @@
   to { opacity: 1; }
 }
 
+@keyframes view-enter {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes price-flash {
+  0%   { background-color: rgba(16, 185, 129, 0.28); }
+  100% { background-color: transparent; }
+}
+
+@keyframes row-enter {
+  from { opacity: 0; transform: translateX(-6px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .fade-in-up,
   .fade-in-soft,
-  .stagger-fade-children > * {
+  .stagger-fade-children > *,
+  .view-enter,
+  .price-saved,
+  .row-enter {
     animation: none !important;
   }
 }

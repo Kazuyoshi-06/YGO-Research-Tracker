@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useState, useEffect } from "react";
 import Image from "next/image";
 import { LayoutDashboard, TrendingUp } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -119,6 +119,12 @@ function StatCard({ label, value, sub, accent = false, delta }: {
 function StatusBar({ byStatus, total, height = "h-3" }: {
   byStatus: Record<string, number>; total: number; height?: string;
 }) {
+  const [animated, setAnimated] = useState(false);
+  useEffect(() => {
+    const t = setTimeout(() => setAnimated(true), 60);
+    return () => clearTimeout(t);
+  }, []);
+
   const segments = [
     { key: "Reçu",        color: "bg-emerald-500", label: "Reçu",        labelColor: "text-emerald-400" },
     { key: "Commandé",    color: "bg-amber-500",   label: "Commandé",    labelColor: "text-amber-400" },
@@ -132,11 +138,15 @@ function StatusBar({ byStatus, total, height = "h-3" }: {
         {segments.map(({ key, color }) => {
           const count = byStatus[key] ?? 0;
           if (count === 0) return null;
+          const pct = (count / total) * 100;
           return (
             <div
               key={key}
-              className={cn("transition-all", color)}
-              style={{ width: `${(count / total) * 100}%` }}
+              className={cn(color)}
+              style={{
+                width: animated ? `${pct}%` : "0%",
+                transition: "width 0.55s cubic-bezier(0.22, 1, 0.36, 1)",
+              }}
             />
           );
         })}
