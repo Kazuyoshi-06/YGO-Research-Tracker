@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { auth } from "@/auth";
 import { writeFile } from "fs/promises";
 import { join } from "path";
 import { existsSync } from "fs";
@@ -8,6 +9,9 @@ export async function POST(
   _req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const session = await auth();
+  if (!session) return NextResponse.json({ error: "Non autorisé" }, { status: 401 });
+
   const { id } = await params;
   const cardId = parseInt(id, 10);
 

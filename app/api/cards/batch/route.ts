@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { auth } from "@/auth";
 import { z } from "zod";
 
 const Schema = z.object({
@@ -8,6 +9,9 @@ const Schema = z.object({
 
 // POST /api/cards/batch — retourne les cartes trouvées + IDs inconnus
 export async function POST(req: NextRequest) {
+  const session = await auth();
+  if (!session) return NextResponse.json({ error: "Non autorisé" }, { status: 401 });
+
   const body = await req.json().catch(() => null);
   const parsed = Schema.safeParse(body);
 

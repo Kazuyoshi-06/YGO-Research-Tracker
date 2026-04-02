@@ -1,3 +1,5 @@
+import { redirect } from "next/navigation";
+import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
 import { TrackerClient } from "@/components/tracker/TrackerClient";
 import type { WatchlistEntry } from "@/components/tracker/types";
@@ -5,8 +7,12 @@ import type { WatchlistEntry } from "@/components/tracker/types";
 export const dynamic = "force-dynamic";
 
 export default async function Home() {
+  const session = await auth();
+  if (!session) redirect("/login");
+
   const [entries, sellers] = await Promise.all([
     prisma.watchlistEntry.findMany({
+      where: { userId: session.user.id },
       orderBy: { sortOrder: "asc" },
       include: {
         card: {
@@ -19,15 +25,35 @@ export default async function Home() {
             hasLocalImage: true,
           },
         },
-        prices: {
-          select: { sellerId: true, price: true, previousPrice: true, previousUpdatedAt: true, updatedAt: true },
-        },
       },
     }),
     prisma.seller.findMany({ orderBy: { createdAt: "asc" } }),
   ]);
 
-  // Conversion DateTime → string pour la sérialisation Next.js
+  // Charger les prix globaux pour les cartes de la watchlist
+  const cardIds = [...new Set(entries.map((e) => e.cardId))];
+  const prices = cardIds.length > 0
+    ? await prisma.price.findMany({
+        where: { cardId: { in: cardIds } },
+        select: {
+          cardId: true,
+          sellerId: true,
+          price: true,
+          previousPrice: true,
+          previousUpdatedAt: true,
+          updatedAt: true,
+        },
+      })
+    : [];
+
+  const pricesByCardId = new Map<number, typeof prices>();
+  for (const p of prices) {
+    const arr = pricesByCardId.get(p.cardId) ?? [];
+    arr.push(p);
+    pricesByCardId.set(p.cardId, arr);
+  }
+
+  // Sérialisation explicite pour Next.js (évite les objets Prisma bruts)
   const serialized = entries.map((e) => ({
     id: e.id,
     deck: e.deck,
@@ -48,7 +74,7 @@ export default async function Home() {
       imageUrl: e.card.imageUrl,
       hasLocalImage: e.card.hasLocalImage,
     },
-    prices: e.prices.map((p) => ({
+    prices: (pricesByCardId.get(e.cardId) ?? []).map((p) => ({
       sellerId: p.sellerId,
       price: p.price,
       previousPrice: p.previousPrice,
@@ -66,6 +92,7 @@ export default async function Home() {
     <TrackerClient
       initialEntries={serialized as WatchlistEntry[]}
       initialSellers={serializedSellers}
+      isAdmin={session.user.role === "ADMIN"}
     />
   );
 }

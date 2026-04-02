@@ -1,13 +1,19 @@
 import { NextRequest, NextResponse } from "next/server";
+import { auth } from "@/auth";
 import { syncYGOCards } from "@/lib/sync";
+import { prisma } from "@/lib/prisma";
 
-// POST /api/sync — déclenche une synchronisation manuelle
+// POST /api/sync — sync manuelle (admin uniquement)
 export async function POST(req: NextRequest) {
-  // Protection simple par token (optionnel en dev)
+  // Autoriser aussi les appels cron via Bearer token
   const authHeader = req.headers.get("authorization");
   const cronSecret = process.env.CRON_SECRET;
-  if (cronSecret && authHeader !== `Bearer ${cronSecret}`) {
-    return NextResponse.json({ error: "Non autorisé" }, { status: 401 });
+  const isCron = cronSecret && authHeader === `Bearer ${cronSecret}`;
+
+  if (!isCron) {
+    const session = await auth();
+    if (!session) return NextResponse.json({ error: "Non autorisé" }, { status: 401 });
+    if (session.user.role !== "ADMIN") return NextResponse.json({ error: "Réservé aux admins" }, { status: 403 });
   }
 
   try {
@@ -19,9 +25,11 @@ export async function POST(req: NextRequest) {
   }
 }
 
-// GET /api/sync — status de la dernière sync (nb de cartes en base)
+// GET /api/sync — statut DB (authentifié)
 export async function GET() {
-  const { prisma } = await import("@/lib/prisma");
+  const session = await auth();
+  if (!session) return NextResponse.json({ error: "Non autorisé" }, { status: 401 });
+
   const [cards, cardSets] = await Promise.all([
     prisma.card.count(),
     prisma.cardSet.count(),

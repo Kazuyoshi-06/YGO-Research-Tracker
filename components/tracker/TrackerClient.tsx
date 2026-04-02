@@ -2,6 +2,7 @@
 
 import { useState, useCallback, useRef, useEffect, useMemo, Fragment, forwardRef, useImperativeHandle } from "react";
 import Image from "next/image";
+import Link from "next/link";
 import { Plus, Trash2, Users, RefreshCw, X, ExternalLink, Search, Download, Upload, Pencil, ShoppingCart, LayoutDashboard, DatabaseBackup } from "lucide-react";
 import {
   Select,
@@ -12,10 +13,12 @@ import {
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import { CardAutocomplete } from "./CardAutocomplete";
+import { AppLogo } from "./AppLogo";
 import { SellerDialog } from "./SellerDialog";
 import { ImportDialog } from "./ImportDialog";
 import { PurchasePlan } from "./PurchasePlan";
 import { Dashboard } from "./Dashboard";
+import { UserMenu } from "./UserMenu";
 import type { WatchlistEntry, Seller, CardInfo, RarityOption } from "./types";
 
 // ── Helper : calcule les seller IDs au meilleur prix sur une ligne ────────
@@ -358,6 +361,7 @@ function SortIndicator({ column, sort }: { column: "name" | "qty" | number; sort
 interface TrackerClientProps {
   initialEntries: WatchlistEntry[];
   initialSellers: Seller[];
+  isAdmin?: boolean;
 }
 
 function hasCard(
@@ -375,7 +379,7 @@ async function readApiError(response: Response, fallback: string) {
   }
 }
 
-export function TrackerClient({ initialEntries, initialSellers }: TrackerClientProps) {
+export function TrackerClient({ initialEntries, initialSellers, isAdmin = false }: TrackerClientProps) {
   const [entries, setEntries] = useState<WatchlistEntry[]>(initialEntries);
   const [sellers, setSellers] = useState<Seller[]>(initialSellers);
   const [uiError, setUiError] = useState("");
@@ -457,6 +461,50 @@ export function TrackerClient({ initialEntries, initialSellers }: TrackerClientP
     () => validEntries.filter((e) => e.status === "Reçu").length,
     [validEntries]
   );
+  const totalEstimated = useMemo(() => {
+    return validEntries.reduce((sum, entry) => {
+      const prices = entry.prices
+        .map((p) => p.price)
+        .filter((price): price is number => price !== null);
+
+      if (prices.length === 0) return sum;
+      return sum + Math.min(...prices) * entry.quantity;
+    }, 0);
+  }, [validEntries]);
+  const contextStats = useMemo(() => {
+    return [
+      {
+        label: "Watchlist",
+        value: `${validEntries.length} carte${validEntries.length !== 1 ? "s" : ""}`,
+        tone: "text-gold/88",
+      },
+      {
+        label: "À commander",
+        value: `${toOrderCount}`,
+        tone: "text-blue-200",
+      },
+      {
+        label: "Commandé",
+        value: `${orderedCount}`,
+        tone: "text-amber-200",
+      },
+      {
+        label: "Reçu",
+        value: `${receivedCount}`,
+        tone: "text-emerald-200",
+      },
+      {
+        label: "Estimé",
+        value: `€${totalEstimated.toFixed(2)}`,
+        tone: "text-foreground/92",
+      },
+      {
+        label: "Vendeurs",
+        value: `${sellers.length}`,
+        tone: "text-foreground/88",
+      },
+    ];
+  }, [validEntries.length, toOrderCount, orderedCount, receivedCount, totalEstimated, sellers.length]);
 
   // ── Sélection multiple ────────────────────────────────────────────────────
 
@@ -645,19 +693,20 @@ export function TrackerClient({ initialEntries, initialSellers }: TrackerClientP
   }, []);
 
   const updatePrice = useCallback(
-    async (watchlistEntryId: number, sellerId: number, price: number | null) => {
+    async (cardId: number, sellerId: number, price: number | null) => {
       const res = await fetch("/api/prices", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ watchlistEntryId, sellerId, price }),
+        body: JSON.stringify({ cardId, sellerId, price }),
       });
       if (!res.ok) {
         throw new Error(await readApiError(res, "Erreur lors de la mise à jour du prix"));
       }
-      const updated = await res.json() as { sellerId: number; price: number | null; previousPrice: number | null; previousUpdatedAt: string | null; updatedAt: string };
+      const updated = await res.json() as { cardId: number; sellerId: number; price: number | null; previousPrice: number | null; previousUpdatedAt: string | null; updatedAt: string };
+      // Propager le prix à toutes les entrées partageant la même carte (prix global)
       setEntries((prev) =>
         prev.map((e) => {
-          if (e.id !== watchlistEntryId) return e;
+          if (e.cardId !== cardId) return e;
           const existing = e.prices.find((p) => p.sellerId === sellerId);
           const newPrice = {
             sellerId,
@@ -930,7 +979,7 @@ export function TrackerClient({ initialEntries, initialSellers }: TrackerClientP
           const pRes = await fetch("/api/prices", {
             method: "PUT",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ watchlistEntryId: newEntry.id, sellerId: currentSellerId, price: p.price }),
+            body: JSON.stringify({ cardId: newEntry.cardId, sellerId: currentSellerId, price: p.price }),
           });
           if (pRes.ok) {
             const saved = await pRes.json();
@@ -1159,7 +1208,7 @@ export function TrackerClient({ initialEntries, initialSellers }: TrackerClientP
                 previousUpdatedAt={priceData?.previousUpdatedAt ?? null}
                 isBest={bestIds.has(seller.id)}
                 onSave={(v) => {
-                  updatePrice(entry.id, seller.id, v).catch((error) => {
+                  updatePrice(entry.cardId, seller.id, v).catch((error) => {
                     showError(error, "Erreur lors de la mise à jour du prix");
                   });
                 }}
@@ -1195,239 +1244,280 @@ export function TrackerClient({ initialEntries, initialSellers }: TrackerClientP
   return (
     <div className="flex flex-col h-screen overflow-hidden bg-[radial-gradient(circle_at_top,#1a1d29_0%,#0d0e12_42%)] fade-in-soft">
       {/* ── Header ──────────────────────────────────────────────────────── */}
-      <header className="flex-none border-b border-gold/10 bg-[linear-gradient(180deg,rgba(19,20,24,0.96),rgba(13,14,18,0.98))] px-4 py-2.5 backdrop-blur-sm fade-in-up">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div className="min-w-0 space-y-1.5">
+      <header className="flex-none border-b border-gold/10 bg-[linear-gradient(180deg,rgba(19,20,24,0.97),rgba(13,14,18,0.98))] px-4 py-3 backdrop-blur-sm fade-in-up">
+        <div className="hidden items-center gap-4 lg:flex">
+          <div className="min-w-0 flex-shrink-0">
             <button
               onClick={() => setView("table")}
-              className="font-heading text-base font-semibold tracking-[0.14em] text-gold uppercase hover:opacity-80 transition-opacity sm:text-lg"
+              className="rounded-2xl outline-none transition-opacity hover:opacity-95 focus-visible:ring-2 focus-visible:ring-gold/30"
+              aria-label="Revenir au tableau"
             >
-              YGO Research Tracker
+              <AppLogo active={view === "table"} />
             </button>
-            <div className="flex flex-wrap items-center gap-2 text-[11px]">
-              <span className="rounded-full border border-gold/20 bg-gold/8 px-2.5 py-1 font-medium tracking-[0.08em] text-gold/80 uppercase">
+          </div>
+
+          <div className="flex min-w-0 flex-1 items-center justify-center">
+            <div className="inline-flex items-center gap-1 rounded-full border border-border/60 bg-card/60 p-1 shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]">
+              <button
+                onClick={() => setView("table")}
+                className={cn(
+                  "flex h-8 items-center gap-1.5 rounded-full px-3 text-xs font-medium transition-colors",
+                  view === "table"
+                    ? "bg-gold/10 text-gold ring-1 ring-gold/20"
+                    : "text-muted-foreground/88 hover:bg-surface-raised hover:text-foreground"
+                )}
+              >
                 Watchlist
-              </span>
-              <span className="hidden text-muted-foreground/55 lg:inline">
-                Compare les vendeurs, priorise les achats et garde la progression visible.
-              </span>
-            </div>
-            <div className="hidden flex-wrap gap-1.5 stagger-fade-children sm:flex">
-              <span className="rounded-full border border-border/60 bg-card/70 px-2.5 py-1 text-[10px] uppercase tracking-[0.12em] text-muted-foreground/55">
-                Cartes <span className="ml-1 text-sm font-semibold normal-case tracking-normal text-foreground tabular-nums">{validEntries.length}</span>
-              </span>
-              <span className="rounded-full border border-blue-700/20 bg-blue-950/15 px-2.5 py-1 text-[10px] uppercase tracking-[0.12em] text-blue-300/60">
-                À commander <span className="ml-1 text-sm font-semibold normal-case tracking-normal text-blue-200 tabular-nums">{toOrderCount}</span>
-              </span>
-              <span className="rounded-full border border-amber-700/20 bg-amber-950/15 px-2.5 py-1 text-[10px] uppercase tracking-[0.12em] text-amber-300/60">
-                Commandé <span className="ml-1 text-sm font-semibold normal-case tracking-normal text-amber-200 tabular-nums">{orderedCount}</span>
-              </span>
-              <span className="rounded-full border border-emerald-700/20 bg-emerald-950/15 px-2.5 py-1 text-[10px] uppercase tracking-[0.12em] text-emerald-300/60">
-                Reçu <span className="ml-1 text-sm font-semibold normal-case tracking-normal text-emerald-200 tabular-nums">{receivedCount}</span>
-              </span>
-              <span className="rounded-full border border-border/60 bg-card/70 px-2.5 py-1 text-[10px] uppercase tracking-[0.12em] text-muted-foreground/55">
-                Vendeurs <span className="ml-1 text-sm font-semibold normal-case tracking-normal text-foreground tabular-nums">{sellers.length}</span>
-              </span>
+              </button>
+              <button
+                onClick={() => setView("dashboard")}
+                className={cn(
+                  "flex h-8 items-center gap-1.5 rounded-full px-3 text-xs font-medium transition-colors",
+                  view === "dashboard"
+                    ? "bg-gold/10 text-gold ring-1 ring-gold/20"
+                    : "text-muted-foreground/88 hover:bg-surface-raised hover:text-foreground"
+                )}
+              >
+                <LayoutDashboard className="h-4 w-4" />
+                Dashboard
+              </button>
+              <button
+                onClick={() => setView("plan")}
+                className={cn(
+                  "flex h-8 items-center gap-1.5 rounded-full px-3 text-xs font-medium transition-colors",
+                  view === "plan"
+                    ? "bg-gold/10 text-gold ring-1 ring-gold/20"
+                    : "text-muted-foreground/88 hover:bg-surface-raised hover:text-foreground"
+                )}
+              >
+                <ShoppingCart className="h-4 w-4" />
+                Plan d'achat
+                {toOrderCount > 0 && (
+                  <span className="rounded-full bg-blue-900/50 px-1.5 py-0.5 text-[10px] leading-none text-blue-200 tabular-nums">
+                    {toOrderCount}
+                  </span>
+                )}
+              </button>
             </div>
           </div>
-          <div className="hidden w-full flex-wrap items-center justify-start gap-2 sm:flex sm:w-auto sm:justify-end stagger-fade-children">
-            <span className="mr-1 hidden text-[11px] text-muted-foreground/55 tabular-nums lg:inline">
-              {entries.length} carte{entries.length !== 1 ? "s" : ""}
-            </span>
-          <button
-            onClick={() => setView((v) => v === "dashboard" ? "table" : "dashboard")}
-            title={view === "dashboard" ? "Retour au tableau" : "Tableau de bord"}
-            className={cn(
-              "flex min-h-8 items-center justify-center gap-1.5 text-xs transition-colors px-3 py-1.5 rounded-full border basis-[calc(50%-0.25rem)] sm:basis-auto",
-              view === "dashboard"
-                ? "text-gold border-gold/30 bg-gold/10 hover:bg-gold/15"
-                : "text-muted-foreground border-border/60 bg-card/70 hover:text-foreground hover:bg-surface-raised"
-            )}
-          >
-            <LayoutDashboard className="w-3.5 h-3.5" />
-            Dashboard
-          </button>
-          <button
-            onClick={() => setView((v) => v === "plan" ? "table" : "plan")}
-            title={view === "plan" ? "Retour au tableau" : "Voir le plan d'achat"}
-            className={cn(
-              "flex min-h-8 items-center justify-center gap-1.5 text-xs transition-colors px-3 py-1.5 rounded-full border basis-[calc(50%-0.25rem)] sm:basis-auto",
-              view === "plan"
-                ? "text-gold border-gold/30 bg-gold/10 hover:bg-gold/15"
-                : "text-muted-foreground border-border/60 bg-card/70 hover:text-foreground hover:bg-surface-raised"
-            )}
-          >
-            <ShoppingCart className="w-3.5 h-3.5" />
-            Plan d'achat
-            {toOrderCount > 0 && (
-              <span className="text-[10px] bg-blue-900/50 text-blue-300 px-1.5 py-0.5 rounded-full tabular-nums leading-none">
-                {toOrderCount}
-              </span>
-            )}
-          </button>
-          <button
-            onClick={() => setImportDialog(true)}
-            title="Importer un deck YDK"
-            className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground
-                       transition-colors px-3 py-1.5 rounded-full border border-border/60 bg-card/70 hover:bg-surface-raised min-h-8 basis-[calc(50%-0.25rem)] justify-center sm:basis-auto"
-          >
-            <Upload className="w-3.5 h-3.5" />
-            Importer
-          </button>
-          <button
-            onClick={exportToCSV}
-            disabled={entries.length === 0}
-            title="Exporter la watchlist complète en CSV"
-            className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground
-                       transition-colors px-3 py-1.5 rounded-full border border-border/60 bg-card/70 hover:bg-surface-raised disabled:opacity-30
-                       disabled:cursor-not-allowed min-h-8 basis-[calc(50%-0.25rem)] justify-center sm:basis-auto"
-          >
-            <Download className="w-3.5 h-3.5" />
-            Watchlist CSV
-          </button>
-          <button
-            onClick={exportBackup}
-            disabled={entries.length === 0}
-            title="Exporter un backup JSON complet"
-            className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground
-                       transition-colors px-3 py-1.5 rounded-full border border-border/60 bg-card/70 hover:bg-surface-raised disabled:opacity-30
-                       disabled:cursor-not-allowed min-h-8 basis-[calc(50%-0.25rem)] justify-center sm:basis-auto"
-          >
-            <DatabaseBackup className="w-3.5 h-3.5" />
-            Backup
-          </button>
-          <button
-            onClick={() => restoreFileRef.current?.click()}
-            disabled={restoring}
-            title="Restaurer depuis un backup JSON"
-            className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground
-                       transition-colors px-3 py-1.5 rounded-full border border-border/60 bg-card/70 hover:bg-surface-raised disabled:opacity-50
-                       disabled:cursor-not-allowed min-h-8 basis-[calc(50%-0.25rem)] justify-center sm:basis-auto"
-          >
-            <Upload className="w-3.5 h-3.5" />
-            {restoring ? "Restauration…" : "Restaurer"}
-          </button>
-          <button
-            onClick={triggerSync}
-            disabled={syncing}
-            title="Synchroniser la base YGOProDeck"
-            className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground
-                       transition-colors px-3 py-1.5 rounded-full border border-border/60 bg-card/70 hover:bg-surface-raised disabled:opacity-50 min-h-8 basis-[calc(50%-0.25rem)] justify-center sm:basis-auto"
-          >
-            <RefreshCw className={`w-3.5 h-3.5 ${syncing ? "animate-spin" : ""}`} />
-            Sync
-          </button>
-          <button
-            onClick={() => setSellerDialog(true)}
-            className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground
-                       transition-colors px-3 py-1.5 rounded-full border border-border/60 bg-card/70 hover:bg-surface-raised min-h-8 basis-[calc(50%-0.25rem)] justify-center sm:basis-auto"
-          >
-            <Users className="w-3.5 h-3.5" />
-            Vendeurs
-          </button>
+
+          <div className="flex min-w-0 flex-shrink-0 items-center justify-end gap-2">
+            <div className="flex items-center gap-1 rounded-full border border-border/60 bg-card/60 p-1">
+              <button
+                onClick={() => setImportDialog(true)}
+                title="Importer un deck YDK"
+                className="flex h-8 items-center gap-1.5 rounded-full px-3 text-xs text-muted-foreground/88 transition-colors hover:bg-surface-raised hover:text-foreground"
+              >
+                <Upload className="h-4 w-4" />
+                Importer
+              </button>
+              <button
+                onClick={exportToCSV}
+                disabled={entries.length === 0}
+                title="Exporter la watchlist complète en CSV"
+                className="flex h-8 items-center gap-1.5 rounded-full px-3 text-xs text-muted-foreground/88 transition-colors hover:bg-surface-raised hover:text-foreground disabled:cursor-not-allowed disabled:opacity-35"
+              >
+                <Download className="h-4 w-4" />
+                CSV
+              </button>
+              <button
+                onClick={exportBackup}
+                disabled={entries.length === 0}
+                title="Exporter un backup JSON complet"
+                className="flex h-8 items-center gap-1.5 rounded-full px-3 text-xs text-muted-foreground/88 transition-colors hover:bg-surface-raised hover:text-foreground disabled:cursor-not-allowed disabled:opacity-35"
+              >
+                <DatabaseBackup className="h-4 w-4" />
+                Backup
+              </button>
+              <button
+                onClick={() => restoreFileRef.current?.click()}
+                disabled={restoring}
+                title="Restaurer depuis un backup JSON"
+                className="flex h-8 items-center gap-1.5 rounded-full px-3 text-xs text-muted-foreground/88 transition-colors hover:bg-surface-raised hover:text-foreground disabled:cursor-not-allowed disabled:opacity-35"
+              >
+                <Upload className="h-4 w-4" />
+                {restoring ? "Restauration…" : "Restaurer"}
+              </button>
+              <button
+                onClick={triggerSync}
+                disabled={syncing}
+                title="Synchroniser la base YGOProDeck"
+                className="flex h-8 items-center gap-1.5 rounded-full px-3 text-xs text-muted-foreground/88 transition-colors hover:bg-surface-raised hover:text-foreground disabled:cursor-not-allowed disabled:opacity-35"
+              >
+                <RefreshCw className={cn("h-4 w-4", syncing && "animate-spin")} />
+                Sync
+              </button>
+            </div>
+
+            <span className="h-5 w-px bg-border/70" aria-hidden="true" />
+
+            <button
+              onClick={() => setSellerDialog(true)}
+              className="flex h-8 items-center gap-1.5 rounded-full border border-border/60 bg-card/60 px-3 text-xs text-muted-foreground/88 transition-colors hover:bg-surface-raised hover:text-foreground"
+            >
+              <Users className="h-4 w-4" />
+              Vendeurs
+            </button>
+
+            <UserMenu isAdmin={isAdmin} />
+          </div>
         </div>
 
-        <div className="w-full space-y-2 sm:hidden">
-          <div className="flex gap-1.5 overflow-x-auto pb-1 no-scrollbar">
-            <span className="shrink-0 rounded-full border border-border/60 bg-card/70 px-2.5 py-1 text-[10px] uppercase tracking-[0.12em] text-muted-foreground/55">
-              Cartes <span className="ml-1 text-sm font-semibold normal-case tracking-normal text-foreground tabular-nums">{validEntries.length}</span>
-            </span>
-            <span className="shrink-0 rounded-full border border-blue-700/20 bg-blue-950/15 px-2.5 py-1 text-[10px] uppercase tracking-[0.12em] text-blue-300/60">
-              À commander <span className="ml-1 text-sm font-semibold normal-case tracking-normal text-blue-200 tabular-nums">{toOrderCount}</span>
-            </span>
-            <span className="shrink-0 rounded-full border border-amber-700/20 bg-amber-950/15 px-2.5 py-1 text-[10px] uppercase tracking-[0.12em] text-amber-300/60">
-              Commandé <span className="ml-1 text-sm font-semibold normal-case tracking-normal text-amber-200 tabular-nums">{orderedCount}</span>
-            </span>
-            <span className="shrink-0 rounded-full border border-emerald-700/20 bg-emerald-950/15 px-2.5 py-1 text-[10px] uppercase tracking-[0.12em] text-emerald-300/60">
-              Reçu <span className="ml-1 text-sm font-semibold normal-case tracking-normal text-emerald-200 tabular-nums">{receivedCount}</span>
-            </span>
-            <span className="shrink-0 rounded-full border border-border/60 bg-card/70 px-2.5 py-1 text-[10px] uppercase tracking-[0.12em] text-muted-foreground/55">
-              Vendeurs <span className="ml-1 text-sm font-semibold normal-case tracking-normal text-foreground tabular-nums">{sellers.length}</span>
-            </span>
+        <div className="space-y-3 lg:hidden">
+          <div className="flex items-center justify-between gap-3">
+            <button
+              onClick={() => setView("table")}
+              className="rounded-2xl outline-none transition-opacity hover:opacity-95 focus-visible:ring-2 focus-visible:ring-gold/30"
+              aria-label="Revenir au tableau"
+            >
+              <AppLogo active={view === "table"} className="pr-4" />
+            </button>
+
+            <UserMenu isAdmin={isAdmin} />
           </div>
 
           <div className="flex gap-2 overflow-x-auto pb-1 no-scrollbar">
             <button
-              onClick={() => setView((v) => v === "dashboard" ? "table" : "dashboard")}
-              title={view === "dashboard" ? "Retour au tableau" : "Tableau de bord"}
+              onClick={() => setView("table")}
               className={cn(
-                "shrink-0 flex min-h-8 items-center justify-center gap-1.5 text-xs transition-colors px-3 py-1.5 rounded-full border",
-                view === "dashboard"
-                  ? "text-gold border-gold/30 bg-gold/10 hover:bg-gold/15"
-                  : "text-muted-foreground border-border/60 bg-card/70 hover:text-foreground hover:bg-surface-raised"
+                "shrink-0 flex h-8 items-center gap-1.5 rounded-full border px-3 text-xs font-medium transition-colors",
+                view === "table"
+                  ? "border-gold/30 bg-gold/10 text-gold"
+                  : "border-border/60 bg-card/70 text-muted-foreground/88 hover:bg-surface-raised hover:text-foreground"
               )}
             >
-              <LayoutDashboard className="w-3.5 h-3.5" />
+              Watchlist
+            </button>
+            <button
+              onClick={() => setView("dashboard")}
+              className={cn(
+                "shrink-0 flex h-8 items-center gap-1.5 rounded-full border px-3 text-xs font-medium transition-colors",
+                view === "dashboard"
+                  ? "border-gold/30 bg-gold/10 text-gold"
+                  : "border-border/60 bg-card/70 text-muted-foreground/88 hover:bg-surface-raised hover:text-foreground"
+              )}
+            >
+              <LayoutDashboard className="h-4 w-4" />
               Dashboard
             </button>
             <button
-              onClick={() => setView((v) => v === "plan" ? "table" : "plan")}
-              title={view === "plan" ? "Retour au tableau" : "Voir le plan d'achat"}
+              onClick={() => setView("plan")}
               className={cn(
-                "shrink-0 flex min-h-8 items-center justify-center gap-1.5 text-xs transition-colors px-3 py-1.5 rounded-full border",
+                "shrink-0 flex h-8 items-center gap-1.5 rounded-full border px-3 text-xs font-medium transition-colors",
                 view === "plan"
-                  ? "text-gold border-gold/30 bg-gold/10 hover:bg-gold/15"
-                  : "text-muted-foreground border-border/60 bg-card/70 hover:text-foreground hover:bg-surface-raised"
+                  ? "border-gold/30 bg-gold/10 text-gold"
+                  : "border-border/60 bg-card/70 text-muted-foreground/88 hover:bg-surface-raised hover:text-foreground"
               )}
             >
-              <ShoppingCart className="w-3.5 h-3.5" />
+              <ShoppingCart className="h-4 w-4" />
               Plan
+              {toOrderCount > 0 && (
+                <span className="rounded-full bg-blue-900/50 px-1.5 py-0.5 text-[10px] leading-none text-blue-200 tabular-nums">
+                  {toOrderCount}
+                </span>
+              )}
             </button>
+          </div>
+
+          <div className="flex gap-2 overflow-x-auto pb-1 no-scrollbar">
             <button
               onClick={() => setImportDialog(true)}
               title="Importer un deck YDK"
-              className="shrink-0 flex min-h-8 items-center justify-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors px-3 py-1.5 rounded-full border border-border/60 bg-card/70 hover:bg-surface-raised"
+              className="shrink-0 flex h-8 items-center gap-1.5 rounded-full border border-border/60 bg-card/70 px-3 text-xs text-muted-foreground/88 transition-colors hover:bg-surface-raised hover:text-foreground"
             >
-              <Upload className="w-3.5 h-3.5" />
+              <Upload className="h-4 w-4" />
               Importer
             </button>
             <button
               onClick={exportToCSV}
               disabled={entries.length === 0}
               title="Exporter la watchlist complète en CSV"
-              className="shrink-0 flex min-h-8 items-center justify-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors px-3 py-1.5 rounded-full border border-border/60 bg-card/70 hover:bg-surface-raised disabled:opacity-30 disabled:cursor-not-allowed"
+              className="shrink-0 flex h-8 items-center gap-1.5 rounded-full border border-border/60 bg-card/70 px-3 text-xs text-muted-foreground/88 transition-colors hover:bg-surface-raised hover:text-foreground disabled:cursor-not-allowed disabled:opacity-35"
             >
-              <Download className="w-3.5 h-3.5" />
+              <Download className="h-4 w-4" />
               CSV
             </button>
             <button
               onClick={exportBackup}
               disabled={entries.length === 0}
               title="Exporter un backup JSON complet"
-              className="shrink-0 flex min-h-8 items-center justify-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors px-3 py-1.5 rounded-full border border-border/60 bg-card/70 hover:bg-surface-raised disabled:opacity-30 disabled:cursor-not-allowed"
+              className="shrink-0 flex h-8 items-center gap-1.5 rounded-full border border-border/60 bg-card/70 px-3 text-xs text-muted-foreground/88 transition-colors hover:bg-surface-raised hover:text-foreground disabled:cursor-not-allowed disabled:opacity-35"
             >
-              <DatabaseBackup className="w-3.5 h-3.5" />
+              <DatabaseBackup className="h-4 w-4" />
               Backup
             </button>
             <button
               onClick={() => restoreFileRef.current?.click()}
               disabled={restoring}
               title="Restaurer depuis un backup JSON"
-              className="shrink-0 flex min-h-8 items-center justify-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors px-3 py-1.5 rounded-full border border-border/60 bg-card/70 hover:bg-surface-raised disabled:opacity-50 disabled:cursor-not-allowed"
+              className="shrink-0 flex h-8 items-center gap-1.5 rounded-full border border-border/60 bg-card/70 px-3 text-xs text-muted-foreground/88 transition-colors hover:bg-surface-raised hover:text-foreground disabled:cursor-not-allowed disabled:opacity-35"
             >
-              <Upload className="w-3.5 h-3.5" />
-              {restoring ? "…" : "Restaurer"}
+              <Upload className="h-4 w-4" />
+              {restoring ? "Restauration…" : "Restaurer"}
             </button>
             <button
               onClick={triggerSync}
               disabled={syncing}
               title="Synchroniser la base YGOProDeck"
-              className="shrink-0 flex min-h-8 items-center justify-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors px-3 py-1.5 rounded-full border border-border/60 bg-card/70 hover:bg-surface-raised disabled:opacity-50"
+              className="shrink-0 flex h-8 items-center gap-1.5 rounded-full border border-border/60 bg-card/70 px-3 text-xs text-muted-foreground/88 transition-colors hover:bg-surface-raised hover:text-foreground disabled:cursor-not-allowed disabled:opacity-35"
             >
-              <RefreshCw className={`w-3.5 h-3.5 ${syncing ? "animate-spin" : ""}`} />
+              <RefreshCw className={cn("h-4 w-4", syncing && "animate-spin")} />
               Sync
             </button>
             <button
               onClick={() => setSellerDialog(true)}
-              className="shrink-0 flex min-h-8 items-center justify-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors px-3 py-1.5 rounded-full border border-border/60 bg-card/70 hover:bg-surface-raised"
+              className="shrink-0 flex h-8 items-center gap-1.5 rounded-full border border-border/60 bg-card/70 px-3 text-xs text-muted-foreground/88 transition-colors hover:bg-surface-raised hover:text-foreground"
             >
-              <Users className="w-3.5 h-3.5" />
+              <Users className="h-4 w-4" />
               Vendeurs
             </button>
           </div>
         </div>
-        </div>
       </header>
+
+      <div className="flex-none border-b border-gold/10 bg-[linear-gradient(180deg,rgba(15,17,22,0.94),rgba(12,13,17,0.98))] px-4 py-2 fade-in-soft">
+        <div className="hidden items-center justify-between gap-4 lg:flex">
+          <div className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-1">
+            {contextStats.map((stat, index) => (
+              <Fragment key={stat.label}>
+                {index > 0 && <span className="h-3.5 w-px bg-border/60" aria-hidden="true" />}
+                <div className="flex items-baseline gap-2">
+                  <span className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground/78">
+                    {stat.label}
+                  </span>
+                  <span className={cn("text-sm font-semibold tabular-nums", stat.tone)}>
+                    {stat.value}
+                  </span>
+                </div>
+              </Fragment>
+            ))}
+          </div>
+
+          <div className="text-[11px] text-muted-foreground/80">
+            {view === "table"
+              ? "Vue tableau"
+              : view === "plan"
+                ? "Vue plan d'achat"
+                : "Vue dashboard"}
+          </div>
+        </div>
+
+        <div className="flex gap-2 overflow-x-auto pb-1 lg:hidden no-scrollbar">
+          {contextStats.map((stat) => (
+            <div
+              key={stat.label}
+              className="shrink-0 rounded-full border border-border/60 bg-card/60 px-3 py-1.5"
+            >
+              <span className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground/78">
+                {stat.label}
+              </span>
+              <span className={cn("ml-2 text-xs font-semibold tabular-nums", stat.tone)}>
+                {stat.value}
+              </span>
+            </div>
+          ))}
+        </div>
+      </div>
 
       {uiError && (
         <div className="flex-none border-b border-amber-700/30 bg-amber-950/40 px-4 py-2 flex items-center justify-between gap-3">
@@ -1463,7 +1553,7 @@ export function TrackerClient({ initialEntries, initialSellers }: TrackerClientP
       {/* ── Vue plan d'achat ────────────────────────────────────────────── */}
       {view === "plan" && (
         <div key="plan" className="view-enter flex-1 flex flex-col min-h-0">
-          <PurchasePlan entries={entries} sellers={sellers} onMarkOrdered={markAsOrdered} />
+          <PurchasePlan entries={entries} sellers={sellers} onMarkOrdered={markAsOrdered} isAdmin={isAdmin} />
         </div>
       )}
 
@@ -1968,29 +2058,31 @@ export function TrackerClient({ initialEntries, initialSellers }: TrackerClientP
       )}
 
       {/* ── Footer ──────────────────────────────────────────────────────── */}
-      <footer className="flex-none border-t border-gold/10 bg-[linear-gradient(180deg,rgba(19,20,24,0.96),rgba(13,14,18,0.98))] px-4 py-3 fade-in-up">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+      <footer className="flex-none border-t border-gold/10 bg-[linear-gradient(180deg,rgba(15,17,21,0.98),rgba(11,12,16,0.99))] px-4 py-2.5 fade-in-up">
+        <div className="flex flex-col gap-2.5 sm:flex-row sm:items-center sm:justify-between">
         <button
           onClick={() => {
             if (!pending) setPending({ deck: "", quantity: 1 });
           }}
           disabled={!!pending}
-          className="flex min-h-10 items-center justify-center gap-1.5 text-sm text-muted-foreground hover:text-gold
-                     transition-colors px-4 py-2 rounded-full border border-border/60 bg-card/70 hover:bg-surface-raised
+          className="flex min-h-10 items-center justify-center gap-2 text-sm font-medium text-gold hover:text-gold
+                     transition-colors px-4 py-2 rounded-full border border-gold/20 bg-gold/[0.08] hover:bg-gold/[0.12]
                      disabled:opacity-30 disabled:cursor-not-allowed"
         >
-          <Plus className="w-4 h-4" />
+          <span className="inline-flex h-5 w-5 items-center justify-center rounded-full border border-gold/25 bg-gold/10">
+            <Plus className="w-3.5 h-3.5" />
+          </span>
           Ajouter une carte
         </button>
 
-        <div className="hidden flex-wrap items-center gap-2 text-[10px] text-muted-foreground/35 font-mono sm:flex">
-          <span className="rounded-full border border-border/60 bg-card/70 px-2.5 py-1">
+        <div className="hidden items-center gap-2 sm:flex">
+          <span className="rounded-full border border-border/60 bg-card/65 px-2.5 py-1 text-[10px] text-muted-foreground/82">
             {entries.length} entr{entries.length !== 1 ? "ées" : "ée"}
           </span>
-          <span className="rounded-full border border-border/60 bg-card/70 px-2.5 py-1">
+          <span className="rounded-full border border-border/60 bg-card/65 px-2.5 py-1 text-[10px] text-muted-foreground/82">
             {sellers.length} vendeur{sellers.length !== 1 ? "s" : ""}
           </span>
-          <span className="rounded-full border border-gold/15 bg-gold/8 px-2.5 py-1 text-gold/70">
+          <span className="rounded-full border border-gold/20 bg-gold/[0.08] px-2.5 py-1 text-[10px] text-gold/82">
             vue {view === "table" ? "tableau" : view === "plan" ? "plan" : "dashboard"}
           </span>
         </div>

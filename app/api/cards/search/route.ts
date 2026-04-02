@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { auth } from "@/auth";
 import { z } from "zod";
 
 const SearchSchema = z.object({
@@ -8,6 +9,9 @@ const SearchSchema = z.object({
 });
 
 export async function GET(req: NextRequest) {
+  const session = await auth();
+  if (!session) return NextResponse.json({ error: "Non autorisé" }, { status: 401 });
+
   const params = Object.fromEntries(req.nextUrl.searchParams);
   const parsed = SearchSchema.safeParse(params);
 

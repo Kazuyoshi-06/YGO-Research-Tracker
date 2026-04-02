@@ -39,6 +39,7 @@ interface PurchasePlanProps {
   entries: WatchlistEntry[];
   sellers: Seller[];
   onMarkOrdered: (ids: number[]) => Promise<void>;
+  isAdmin?: boolean;
 }
 
 interface AssignedItem {
@@ -395,7 +396,7 @@ function getShippingOptionsForDisplay(subtotal: number, cardCount: number) {
   }));
 }
 
-export function PurchasePlan({ entries, sellers, onMarkOrdered }: PurchasePlanProps) {
+export function PurchasePlan({ entries, sellers, onMarkOrdered, isAdmin = false }: PurchasePlanProps) {
   const [mode, setMode] = useState<PlanMode>("simple");
   const [loadingId, setLoadingId] = useState<string | null>(null);
   const [selectedShippingOptions, setSelectedShippingOptions] = useState<Record<number, string>>({});
@@ -616,6 +617,7 @@ export function PurchasePlan({ entries, sellers, onMarkOrdered }: PurchasePlanPr
                 </span>
               </div>
 
+              {isAdmin && (
               <div className="flex flex-wrap items-center gap-2">
                 <div className="inline-flex rounded-full border border-border/60 bg-card/60 p-1">
                   <button
@@ -658,6 +660,7 @@ export function PurchasePlan({ entries, sellers, onMarkOrdered }: PurchasePlanPr
                   </span>
                 )}
               </div>
+              )}
             </div>
 
             <div className="grid grid-cols-1 gap-2 sm:flex sm:flex-row sm:items-center sm:flex-shrink-0">
@@ -691,10 +694,13 @@ export function PurchasePlan({ entries, sellers, onMarkOrdered }: PurchasePlanPr
               <span className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground/45">Sous-total cartes</span>
               <div className="mt-1 font-semibold tabular-nums text-foreground">{formatEuro(subtotalEstimated)}</div>
             </div>
+            {isAdmin && (
             <div className="rounded-xl border border-border/60 bg-card/60 px-3 py-2">
               <span className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground/45">Port estimé</span>
               <div className="mt-1 font-semibold tabular-nums text-foreground">{formatEuro(shippingEstimated)}</div>
             </div>
+            )}
+            {isAdmin && (
             <div className="rounded-xl border border-border/60 bg-card/60 px-3 py-2">
               <span className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground/45">Stratégie</span>
               <div className="mt-1 font-semibold text-foreground">{mode === "optimized" ? "Optimisé" : "Simple"}</div>
@@ -702,6 +708,7 @@ export function PurchasePlan({ entries, sellers, onMarkOrdered }: PurchasePlanPr
                 {manualShippingCount === 0 ? "Tous les ports sont résolus" : `${manualShippingCount} panier${manualShippingCount > 1 ? "s" : ""} à confirmer`}
               </div>
             </div>
+            )}
             <div className="rounded-xl border border-gold/15 bg-gold/8 px-3 py-2">
               <span className="text-[10px] uppercase tracking-[0.14em] text-gold/60">Total estimé</span>
               <div className="mt-1 font-semibold tabular-nums text-gold">{formatEuro(totalEstimated)}</div>
@@ -896,7 +903,7 @@ export function PurchasePlan({ entries, sellers, onMarkOrdered }: PurchasePlanPr
                   <span className="text-[11px] text-muted-foreground/50 uppercase tracking-wider">
                     Sous-total · {items.reduce((sum, item) => sum + item.entry.quantity, 0)} unité{items.reduce((sum, item) => sum + item.entry.quantity, 0) !== 1 ? "s" : ""}
                   </span>
-                  {!requiresManualShipping && shippingLabel && (
+                  {isAdmin && !requiresManualShipping && shippingLabel && (
                     <div className="flex flex-wrap items-center gap-2">
                       <span className="text-[10px] px-1.5 py-0.5 rounded-full border border-border/60 bg-card/60 text-foreground/75">
                         {shippingLabel}
@@ -908,7 +915,7 @@ export function PurchasePlan({ entries, sellers, onMarkOrdered }: PurchasePlanPr
                       )}
                     </div>
                   )}
-                  {requiresManualShipping ? (
+                  {isAdmin && requiresManualShipping ? (
                     <div className="flex flex-col gap-2">
                       {(() => {
                         const shippingOptions = getShippingOptionsForDisplay(subtotal, cardCount);
@@ -949,7 +956,7 @@ export function PurchasePlan({ entries, sellers, onMarkOrdered }: PurchasePlanPr
                         );
                       })()}
                     </div>
-                  ) : shippingEstimate !== null ? (
+                  ) : isAdmin && shippingEstimate !== null ? (
                     <span className="text-[10px] text-muted-foreground/45">
                       Calcul {hasManualShippingOverride ? "ajusté manuellement" : "automatique"} appliqué.
                     </span>
@@ -965,12 +972,12 @@ export function PurchasePlan({ entries, sellers, onMarkOrdered }: PurchasePlanPr
                     <span className="text-[11px] font-normal text-muted-foreground/50 mr-0.5">€</span>
                     {subtotal.toFixed(2)}
                   </span>
-                  {totalWithShipping !== null && (
+                  {isAdmin && totalWithShipping !== null && (
                     <span className="block text-[10px] tabular-nums text-gold/70">
                       Total avec port : {formatEuro(totalWithShipping)}
                     </span>
                   )}
-                  {hasManualShippingOverride && (
+                  {isAdmin && hasManualShippingOverride && (
                     <button
                       type="button"
                       onClick={() =>
@@ -1037,9 +1044,11 @@ export function PurchasePlan({ entries, sellers, onMarkOrdered }: PurchasePlanPr
               )}
             </span>
             <span className="text-[11px] text-muted-foreground/40 tabular-nums">
-              Cartes : {formatEuro(subtotalEstimated)} · Port : {formatEuro(shippingEstimated)}
+              {isAdmin
+                ? `Cartes : ${formatEuro(subtotalEstimated)} · Port : ${formatEuro(shippingEstimated)}`
+                : `Cartes : ${formatEuro(subtotalEstimated)}`}
             </span>
-            {mode === "optimized" && optimizationSavings > OPTIMIZATION_EPSILON && (
+            {isAdmin && mode === "optimized" && optimizationSavings > OPTIMIZATION_EPSILON && (
               <span className="text-[11px] text-emerald-300/70 tabular-nums">
                 Soit {formatEuro(optimizationSavings)} de moins que le mode simple
               </span>

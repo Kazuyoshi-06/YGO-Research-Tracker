@@ -1,15 +1,19 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { auth } from "@/auth";
 import { z } from "zod";
 
 const UpsertPriceSchema = z.object({
-  watchlistEntryId: z.number().int().positive(),
+  cardId: z.number().int().positive(),
   sellerId: z.number().int().positive(),
   price: z.number().positive().nullable(),
 });
 
-// PUT /api/prices — crée ou met à jour un prix
+// PUT /api/prices — crée ou met à jour un prix (global Card×Seller)
 export async function PUT(req: NextRequest) {
+  const session = await auth();
+  if (!session) return NextResponse.json({ error: "Non autorisé" }, { status: 401 });
+
   const body = await req.json().catch(() => null);
   const parsed = UpsertPriceSchema.safeParse(body);
 
@@ -20,33 +24,31 @@ export async function PUT(req: NextRequest) {
     );
   }
 
-  const { watchlistEntryId, sellerId, price } = parsed.data;
+  const { cardId, sellerId, price } = parsed.data;
 
-  // Lire la valeur actuelle avant de la remplacer
   const existing = await prisma.price.findUnique({
-    where: { watchlistEntryId_sellerId: { watchlistEntryId, sellerId } },
+    where: { cardId_sellerId: { cardId, sellerId } },
     select: { price: true, updatedAt: true },
   });
 
-  // Décaler current → previous uniquement si la nouvelle valeur est différente
-  // et si l'ancienne n'était pas null (pas d'historique sur un premier saisie depuis null)
   const shouldShift =
     existing !== null &&
     existing.price !== null &&
     existing.price !== price;
 
   const priceRecord = await prisma.price.upsert({
-    where: { watchlistEntryId_sellerId: { watchlistEntryId, sellerId } },
+    where: { cardId_sellerId: { cardId, sellerId } },
     update: {
       price,
+      updatedById: session.user.id,
       ...(shouldShift && {
         previousPrice: existing!.price,
         previousUpdatedAt: existing!.updatedAt,
       }),
     },
-    create: { watchlistEntryId, sellerId, price },
+    create: { cardId, sellerId, price, updatedById: session.user.id },
     select: {
-      watchlistEntryId: true,
+      cardId: true,
       sellerId: true,
       price: true,
       previousPrice: true,
@@ -54,6 +56,19 @@ export async function PUT(req: NextRequest) {
       updatedAt: true,
     },
   });
+
+  // Log pour notification admin
+  if (shouldShift || (existing === null && price !== null)) {
+    await prisma.priceChangeLog.create({
+      data: {
+        cardId,
+        sellerId,
+        oldPrice: existing?.price ?? null,
+        newPrice: price,
+        changedById: session.user.id,
+      },
+    });
+  }
 
   return NextResponse.json(priceRecord);
 }

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { auth } from "@/auth";
 import { z } from "zod";
 
 const VALID_STATUSES = ["", "À commander", "Commandé", "Reçu"] as const;
@@ -19,6 +20,9 @@ export async function PATCH(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const session = await auth();
+  if (!session) return NextResponse.json({ error: "Non autorisé" }, { status: 401 });
+
   const { id } = await params;
   const entryId = parseInt(id, 10);
 
@@ -38,7 +42,7 @@ export async function PATCH(
 
   try {
     const entry = await prisma.watchlistEntry.update({
-      where: { id: entryId },
+      where: { id: entryId, userId: session.user.id },
       data: parsed.data,
       include: {
         card: {
@@ -51,10 +55,23 @@ export async function PATCH(
             hasLocalImage: true,
           },
         },
-        prices: { select: { sellerId: true, price: true, updatedAt: true } },
       },
     });
-    return NextResponse.json(entry);
+
+    // Attacher les prix globaux pour cette carte
+    const prices = await prisma.price.findMany({
+      where: { cardId: entry.cardId },
+      select: {
+        cardId: true,
+        sellerId: true,
+        price: true,
+        previousPrice: true,
+        previousUpdatedAt: true,
+        updatedAt: true,
+      },
+    });
+
+    return NextResponse.json({ ...entry, prices });
   } catch {
     return NextResponse.json({ error: "Entrée introuvable" }, { status: 404 });
   }
@@ -65,6 +82,9 @@ export async function DELETE(
   _req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const session = await auth();
+  if (!session) return NextResponse.json({ error: "Non autorisé" }, { status: 401 });
+
   const { id } = await params;
   const entryId = parseInt(id, 10);
 
@@ -73,7 +93,9 @@ export async function DELETE(
   }
 
   try {
-    await prisma.watchlistEntry.delete({ where: { id: entryId } });
+    await prisma.watchlistEntry.delete({
+      where: { id: entryId, userId: session.user.id },
+    });
     return new NextResponse(null, { status: 204 });
   } catch {
     return NextResponse.json({ error: "Entrée introuvable" }, { status: 404 });

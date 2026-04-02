@@ -8,6 +8,75 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+// ── Authentification (Auth.js) ───────────────────────────────────────────────
+
+model User {
+  id            String    @id @default(cuid())
+  name          String?
+  email         String    @unique
+  emailVerified DateTime?
+  password      String?   // bcrypt, null si OAuth uniquement
+  image         String?
+  role          String    @default("USER") // "USER" | "ADMIN"
+  banned        Boolean   @default(false)
+  createdAt     DateTime  @default(now())
+
+  accounts         Account[]
+  sessions         Session[]
+  resetTokens      PasswordResetToken[]
+  watchlistEntries WatchlistEntry[]
+  priceUpdates     Price[]
+  priceChangeLogs  PriceChangeLog[]
+}
+
+model Account {
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String?
+  access_token      String?
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String?
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([provider, providerAccountId])
+}
+
+model Session {
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model VerificationToken {
+  identifier String
+  token      String
+  expires    DateTime
+
+  @@id([identifier, token])
+}
+
+model PasswordResetToken {
+  id        String   @id @default(cuid())
+  userId    String
+  tokenHash String   @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
 // ── Cartes YGOProDeck ────────────────────────────────────────────────────────
 
 model Card {
@@ -25,76 +94,99 @@ model Card {
   hasLocalImage Boolean  @default(false)
   updatedAt    DateTime  @updatedAt
 
-  cardSets        CardSet[]
+  cardSets         CardSet[]
   watchlistEntries WatchlistEntry[]
+  prices           Price[]
+  priceChangeLogs  PriceChangeLog[]
 
   @@index([name])
 }
 
 // Chaque ligne = combinaison unique (carte × édition × rareté)
-// Source : card_sets[] de l'API YGOProDeck
 model CardSet {
-  id           Int    @id @default(autoincrement())
-  cardId       Int
-  setName      String // ex: "Legend of Blue Eyes White Dragon"
-  setCode      String // ex: "LOB-EN001"
-  setRarity    String // ex: "Ultra Rare"
-  setRarityCode String @default("") // ex: "UR"
+  id            Int    @id @default(autoincrement())
+  cardId        Int
+  setName       String
+  setCode       String
+  setRarity     String
+  setRarityCode String @default("")
 
   card Card @relation(fields: [cardId], references: [id], onDelete: Cascade)
 
-  @@unique([cardId, setCode, setRarity]) // une entrée par carte+code+rareté
+  @@unique([cardId, setCode, setRarity])
   @@index([cardId])
   @@index([setName])
 }
 
-// ── Vendeurs CardMarket ──────────────────────────────────────────────────────
+// ── Vendeurs CardMarket (pool global partagé) ────────────────────────────────
 
 model Seller {
   id              Int      @id @default(autoincrement())
-  name            String   @unique // pseudo CardMarket
+  name            String   @unique
   shippingProfile String   @default("cardmarket-fr-standard")
   createdAt       DateTime @default(now())
 
-  prices Price[]
+  prices          Price[]
+  priceChangeLogs PriceChangeLog[]
 }
 
-// ── Watchlist (tableau de recherche) ────────────────────────────────────────
+// ── Watchlist (par utilisateur) ──────────────────────────────────────────────
 
 model WatchlistEntry {
   id        Int      @id @default(autoincrement())
+  userId    String
   deck      String   @default("")
   cardId    Int
   quantity  Int      @default(1)
-  setName   String?  // édition choisie (optionnel)
-  rarity    String?  // rareté choisie (optionnel)
-  status    String   @default("") // "" | "À commander" | "Commandé" | "Reçu"
+  setName   String?
+  rarity    String?
+  status    String   @default("")
   notes     String   @default("")
-  sortOrder Int      @default(0) // ordre des lignes
+  sortOrder Int      @default(0)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  card   Card    @relation(fields: [cardId], references: [id])
-  prices Price[]
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  card Card @relation(fields: [cardId], references: [id])
 
+  @@index([userId])
   @@index([cardId])
 }
 
-// ── Prix par vendeur ─────────────────────────────────────────────────────────
+// ── Prix global (Card × Seller) ──────────────────────────────────────────────
 
 model Price {
-  id                  Int       @id @default(autoincrement())
-  watchlistEntryId    Int
-  sellerId            Int
-  price               Float?    // null = pas encore renseigné
-  previousPrice       Float?    // valeur avant la dernière mise à jour
-  previousUpdatedAt   DateTime? // date de l'ancienne valeur
-  updatedAt           DateTime  @updatedAt
+  id                Int       @id @default(autoincrement())
+  cardId            Int
+  sellerId          Int
+  price             Float?
+  previousPrice     Float?
+  previousUpdatedAt DateTime?
+  updatedAt         DateTime  @updatedAt
+  updatedById       String?
 
-  watchlistEntry WatchlistEntry @relation(fields: [watchlistEntryId], references: [id], onDelete: Cascade)
-  seller         Seller         @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+  card        Card    @relation(fields: [cardId], references: [id], onDelete: Cascade)
+  seller      Seller  @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+  updatedBy   User?   @relation(fields: [updatedById], references: [id], onDelete: SetNull)
 
-  @@unique([watchlistEntryId, sellerId]) // un prix par (ligne × vendeur)
-  @@index([watchlistEntryId])
+  @@unique([cardId, sellerId])
+  @@index([cardId])
   @@index([sellerId])
+}
+
+// ── Journal des modifications de prix (notifications admin) ─────────────────
+
+model PriceChangeLog {
+  id          Int      @id @default(autoincrement())
+  cardId      Int
+  sellerId    Int
+  oldPrice    Float?
+  newPrice    Float?
+  changedById String
+  changedAt   DateTime @default(now())
+  readByAdmin Boolean  @default(false)
+
+  card      Card   @relation(fields: [cardId], references: [id], onDelete: Cascade)
+  seller    Seller @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+  changedBy User   @relation(fields: [changedById], references: [id], onDelete: Cascade)
 }
