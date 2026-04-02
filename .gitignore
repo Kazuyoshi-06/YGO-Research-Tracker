@@ -54,3 +54,5 @@ AGENTS.md
 FEATURE_*.md
 TOMORROW_PROMPT.md
 progress.md
+/*.md
+!/README.md
