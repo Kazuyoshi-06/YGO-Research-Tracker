@@ -1,10 +1,16 @@
 # YGO Research Tracker
 
-Personal tool for tracking Yu-Gi-Oh! card purchases across CardMarket sellers. Build a watchlist, compare prices side-by-side, plan your orders with shipping cost estimates, and track delivery status — all in one dark-themed interface.
+Personal platform for tracking Yu-Gi-Oh! card purchases across CardMarket sellers. Manage a TCG and OCG watchlist, compare prices side-by-side, run group order waves with submission and consolidation tools, and track delivery status — all in one dark-themed interface.
 
 ---
 
 ## Features
+
+### Multi-format hub (TCG / OCG)
+- Landing page at `/` shows stats for both formats at a glance
+- Navigate directly to `/tracker/tcg` or `/tracker/ocg` via animated format cards
+- Format switcher in the tracker header to jump between the two at any time
+- Cards tagged as TCG-only, OCG-only, or BOTH — search results filtered accordingly
 
 ### Watchlist
 - Search from a local database of ~14 000 cards (synced from YGOProDeck API)
@@ -12,6 +18,7 @@ Personal tool for tracking Yu-Gi-Oh! card purchases across CardMarket sellers. B
 - Card artwork displayed inline (images downloaded and cached locally on first load)
 - Inline editing of deck name, quantity, and notes
 - Status tracking per card: **À commander → Commandé → Reçu**
+  - **Soumis** is an intermediate locked status set automatically during a wave — not manually cyclable
 - Bulk actions: change status or delete multiple rows at once
 
 ### Price comparison
@@ -30,8 +37,8 @@ Personal tool for tracking Yu-Gi-Oh! card purchases across CardMarket sellers. B
 - Dedicated view showing only **À commander** entries, grouped by cheapest seller
 - Shipping cost calculated automatically using the CardMarket France standard rate schedule (Lettre Verte Suivi / R2 / R3 / Colissimo), based on cart weight and order value
 - **Simple mode**: best price per card, one seller per card
-- **Optimised mode**: heuristic that attempts to consolidate small baskets when the shipping savings justify it — shows gain and which cards were moved
-- Manual shipping override for edge cases (selector guides you to a compatible rate line)
+- **Optimised mode**: heuristic that consolidates small baskets when shipping savings justify it
+- Manual shipping override with a guided selector for edge cases
 - Mark an entire vendor's basket as ordered in one click
 - Export plan as CSV (detail per card + vendor recap + global summary)
 
@@ -41,14 +48,50 @@ Personal tool for tracking Yu-Gi-Oh! card purchases across CardMarket sellers. B
 - Top 5 most expensive cards
 - Vendor summary table: best deal count, coverage, total catalogue cost
 
+### Group ordering — Waves
+- Admin creates a **wave** with a name, deadline, and designated sellers
+- Active wave shown as a banner at the top of the tracker and the hub
+- Users submit their **À commander** list — prices are snapshotted at submission time
+- Admin views a full **consolidation** panel: by submission, by card, by seller — exportable as CSV
+- Wave transitions: `open → frozen → ordered → delivered`
+  - **Frozen**: submissions closed, admin reviews and consolidates
+  - **Ordered**: all submitted entries automatically move to **Commandé**
+  - **Delivered**: all ordered entries automatically move to **Reçu**
+- Users can withdraw and re-submit while the wave is still open
+- Wave banner is dismissable per-wave (persisted in localStorage)
+
+### Notifications
+- In-app notification bell with unread badge (polling every 30 s)
+- One notification per wave event: opened, frozen, ordered, delivered, 48h reminder
+- Admin receives a notification when a user submits
+- Auto-marked as read after 1 s when the panel is opened
+
+### Email notifications (Resend)
+- Wave opened → all active users
+- Wave ordered / delivered → submitters only
+- Admin notified when a user submits
+- 48h deadline reminder → users who haven't submitted yet (sent once, no duplicates)
+- Dark-themed HTML templates; silently disabled if `RESEND_API_KEY` is not set
+
 ### Import / Export
 - Import a `.ydk` deck file — cards matched against local DB, unrecognised IDs flagged
 - Export watchlist as CSV (UTF-8 BOM for Excel compatibility)
 - Export purchase plan as structured CSV with shipping breakdown
+- Export wave consolidation as CSV
 
 ### Sync
 - YGOProDeck card database synced automatically every night at 03:00 via `node-cron`
 - Manual sync available via the API at any time
+
+### Admin panel
+- User management: list, ban/unban, view individual watchlist (read-only)
+- Wave management: create, transition, view submissions and consolidation, manage sellers
+- Wave history: aggregated stats for all delivered waves (by wave, by user, by seller)
+
+### Authentication
+- Auth.js v5 — email/password, session-based
+- Roles: `USER` (default) and `ADMIN`
+- `/login`, `/register`, `/forgot-password`, `/account` pages
 
 ---
 
@@ -61,6 +104,8 @@ Personal tool for tracking Yu-Gi-Oh! card purchases across CardMarket sellers. B
 | Styling | Tailwind CSS v4 (CSS-native, no config file) |
 | Components | shadcn/ui 4.1.1 (based on `@base-ui/react`) |
 | Database | Prisma 6.19.2 + SQLite |
+| Auth | Auth.js v5 |
+| Email | Resend |
 | Validation | zod 3.x |
 | Scheduling | node-cron 3.x |
 
@@ -69,14 +114,20 @@ Personal tool for tracking Yu-Gi-Oh! card purchases across CardMarket sellers. B
 ## Data model
 
 ```
-Card           id (YGOProDeck), name, type, imageUrl, hasLocalImage
-CardSet        cardId × setCode × setRarity (unique) — source: YGOProDeck card_sets[]
-Seller         name (unique), shippingProfile
-WatchlistEntry deck, cardId, quantity, setName?, rarity?, status, notes
-Price          watchlistEntryId × sellerId (unique), price?, previousPrice?, previousUpdatedAt?
-```
+Card              id (YGOProDeck), name, type, imageUrl, cardFormat (TCG|OCG|BOTH)
+CardSet           cardId × setCode × setRarity (unique)
+Seller            name (unique), shippingProfile, platform (cardmarket|taobao|autre)
+WatchlistEntry    deck, cardId, quantity, setName?, rarity?, status, notes, format (TCG|OCG)
+Price             watchlistEntryId × sellerId (unique), price?, previousPrice?, previousUpdatedAt?
 
-Price history uses a "one step back" pattern: when a price is updated, the current value shifts to `previousPrice` before being overwritten — no history table needed.
+User              id, email, name, role (USER|ADMIN), banned
+Wave              id, name, status (open|frozen|ordered|delivered), deadline, createdById
+WaveSeller        waveId × sellerId
+OrderSubmission   userId × waveId (unique), status (submitted|confirmed)
+OrderSubmissionItem  submissionId, cardId, cardName, setName, rarity, quantity,
+                     snapshotPrice (locked at submission), preferredSellerId
+Notification      userId, type, title, body, payload, waveId, readAt
+```
 
 ---
 
@@ -86,6 +137,20 @@ Price history uses a "one step back" pattern: when a price is updated, the curre
 
 - Node.js 20+
 - npm
+
+### Environment
+
+Copy `.env.example` to `.env` and fill in the required values:
+
+```bash
+NEXTAUTH_SECRET=your-secret-here
+NEXTAUTH_URL=http://localhost:3000
+
+# Optional — emails are silently skipped if absent
+RESEND_API_KEY=
+EMAIL_FROM="YGO Tracker <noreply@example.com>"
+EMAIL_BASE_URL=http://localhost:3000
+```
 
 ### Install
 
@@ -109,7 +174,7 @@ npm run seed
 npm run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000).
+Open [http://localhost:3000](http://localhost:3000) — you will land on the format hub.
 
 ---
 
@@ -130,38 +195,62 @@ npm run db:reset     # Drop database, re-migrate, re-seed
 
 ```
 app/
-  page.tsx                  # Server component — loads Prisma data, passes to TrackerClient
-  layout.tsx                # Forced dark mode, Cinzel + Geist fonts
-  globals.css               # Tailwind v4 tokens (@theme inline), custom CSS components
+  page.tsx                      # Hub — loads TCG+OCG stats, passes to HubClient
+  layout.tsx                    # Forced dark mode, Cinzel + Geist fonts
+  globals.css                   # Tailwind v4 tokens (@theme inline), custom CSS
+  tracker/
+    [format]/page.tsx           # Format tracker (TCG or OCG)
+  admin/
+    layout.tsx                  # Admin nav
+    users/page.tsx              # User list + ban/unban
+    users/[id]/watchlist/       # Read-only user watchlist
+    waves/page.tsx              # Wave management
+    waves/[id]/page.tsx         # Wave detail (submissions, consolidation, sellers)
+    waves/stats/page.tsx        # Delivered waves history
   api/
-    cards/search/           # GET ?q=  — autocomplete
-    cards/[id]/sets/        # GET      — editions for a card
-    cards/[id]/rarities/    # GET ?setName= — rarities for a card+edition
-    cards/[id]/image/       # POST     — download and cache card image
-    cards/batch/            # POST     — validate a list of YGOProDeck IDs
-    sellers/                # GET/POST/DELETE
-    sellers/[id]/           # PATCH    — update seller (shippingProfile)
-    watchlist/              # GET/POST/PATCH/DELETE
-    prices/                 # PUT      — upsert price with history shift
-    sync/                   # GET/POST — DB status / manual sync
+    cards/…                     # Search, sets, rarities, image cache, batch
+    sellers/…                   # CRUD sellers
+    watchlist/…                 # CRUD watchlist entries
+    prices/                     # Upsert prices with history shift
+    sync/                       # DB status + manual YGOProDeck sync
+    waves/…                     # Wave CRUD + submission + consolidation
+    notifications/…             # In-app notifications
+    admin/…                     # Admin-only endpoints
 
-components/tracker/
-  TrackerClient.tsx         # Main client component — all UI state
-  CardAutocomplete.tsx      # Debounced card search (280 ms)
-  SellerDialog.tsx          # Add/remove sellers
-  ImportDialog.tsx          # .ydk file import with preview
-  PurchasePlan.tsx          # Purchase plan with shipping engine
-  Dashboard.tsx             # Stats dashboard
-  types.ts                  # Shared TypeScript types
+components/
+  hub/
+    HubClient.tsx               # Hub page client component
+    HubHeader.tsx               # Hub header with admin nav + UserMenu
+    FormatCard.tsx              # TCG/OCG card with 3D tilt, stats, logos
+    HubWaveBanner.tsx           # Active wave banner on hub (dismissable)
+  tracker/
+    TrackerClient.tsx           # Main tracker — all UI state, TCG/OCG switcher
+    CardAutocomplete.tsx        # Debounced card search (280 ms)
+    SellerDialog.tsx            # Add/remove sellers
+    ImportDialog.tsx            # .ydk file import
+    PurchasePlan.tsx            # Purchase plan with shipping engine
+    Dashboard.tsx               # Stats dashboard
+    NotificationBell.tsx        # Bell icon, red badge, popover (30 s poll)
+    WaveBanner.tsx              # Active wave banner in tracker (submit/withdraw)
+    types.ts                    # Shared TypeScript types
 
 lib/
-  prisma.ts                 # PrismaClient singleton (absolute datasourceUrl)
-  sync.ts                   # YGOProDeck sync logic (shared between API and cron)
-  cron.ts                   # node-cron scheduler (daily at 03:00, hot-reload safe)
+  prisma.ts                     # PrismaClient singleton
+  sync.ts                       # YGOProDeck sync logic
+  cron.ts                       # node-cron: daily sync + hourly reminder check
+  notifications.ts              # In-app notification helpers
+  email.ts                      # Resend email templates + send functions
+  reminders.ts                  # 48h deadline reminder logic
+  auth.ts                       # Auth.js config
 
 prisma/
   schema.prisma
   seed.ts
+
+public/
+  logos/ygo-tcg.png             # TCG logo (place manually)
+  logos/ocg.png                 # OCG logo (place manually)
+  cards/{id}.jpg                # Cached card images
 ```
 
 ---
@@ -169,7 +258,6 @@ prisma/
 ## Design
 
 - Permanent dark theme — no light mode
-- Colour palette: background `#0d0e12`, gold accent `#c9a227`, night hover `#1c2035`
+- Colour palette: background `#0d0e12`, gold accent `#c9a227`, surface `#13151c`, night hover `#1c2035`
 - Typefaces: Cinzel (headings), Geist Sans (body), Geist Mono (prices/numbers)
-- No chart libraries — progress bars are pure CSS Tailwind
-- No client-side routing — single-page with view toggle (`table | plan | dashboard`)
+- No chart libraries — progress bars and stats are pure CSS / Tailwind

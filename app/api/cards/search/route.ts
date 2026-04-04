@@ -6,6 +6,7 @@ import { z } from "zod";
 const SearchSchema = z.object({
   q: z.string().min(1).max(100),
   limit: z.coerce.number().int().min(1).max(50).default(20),
+  format: z.enum(["TCG", "OCG"]).optional(),
 });
 
 export async function GET(req: NextRequest) {
@@ -19,10 +20,17 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "Paramètre 'q' requis" }, { status: 400 });
   }
 
-  const { q, limit } = parsed.data;
+  const { q, limit, format } = parsed.data;
+
+  // Filtre par format : exclure les cartes exclusives à l'autre format
+  const formatFilter = format === "TCG"
+    ? { cardFormat: { in: ["TCG", "BOTH"] } }
+    : format === "OCG"
+    ? { cardFormat: { in: ["OCG", "BOTH"] } }
+    : {};
 
   const cards = await prisma.card.findMany({
-    where: { name: { contains: q } },
+    where: { name: { contains: q }, ...formatFilter },
     select: { id: true, name: true, type: true, frameType: true, imageUrl: true, hasLocalImage: true },
     orderBy: [
       // exact match en premier

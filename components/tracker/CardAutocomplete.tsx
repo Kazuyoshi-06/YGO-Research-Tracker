@@ -19,6 +19,7 @@ import type { CardInfo } from "./types";
 interface CardAutocompleteProps {
   value: CardInfo | null;
   onChange: (card: CardInfo) => void;
+  format?: "TCG" | "OCG";
   autoOpen?: boolean;
   disabled?: boolean;
 }
@@ -39,6 +40,7 @@ const FRAME_LABELS: Record<string, string> = {
 export function CardAutocomplete({
   value,
   onChange,
+  format,
   autoOpen = false,
   disabled = false,
 }: CardAutocompleteProps) {
@@ -59,7 +61,7 @@ export function CardAutocomplete({
     debounceRef.current = setTimeout(async () => {
       try {
         const res = await fetch(
-          `/api/cards/search?q=${encodeURIComponent(query)}&limit=25`
+          `/api/cards/search?q=${encodeURIComponent(query)}&limit=25${format ? `&format=${format}` : ""}`
         );
         const data = await res.json();
         setResults(Array.isArray(data) ? data : []);

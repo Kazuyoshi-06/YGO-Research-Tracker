@@ -17,6 +17,12 @@ export async function GET(
   }
 
   const setName = req.nextUrl.searchParams.get("setName");
+  const format = req.nextUrl.searchParams.get("format"); // "TCG" | "OCG" | null
+
+  // En mode OCG, pas de données de raretés en DB → saisie libre côté client
+  if (format === "OCG") {
+    return NextResponse.json([]);
+  }
 
   const where = setName
     ? { cardId, setName }

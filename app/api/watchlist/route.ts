@@ -4,6 +4,7 @@ import { auth } from "@/auth";
 import { z } from "zod";
 
 const CreateEntrySchema = z.object({
+  format: z.enum(["TCG", "OCG"]).default("TCG"),
   deck: z.string().max(100).default(""),
   cardId: z.number().int().positive(),
   quantity: z.number().int().min(1).max(99).default(1),
@@ -12,13 +13,16 @@ const CreateEntrySchema = z.object({
 });
 
 // GET /api/watchlist — entrées de l'utilisateur connecté + prix globaux
-export async function GET() {
+export async function GET(req: NextRequest) {
   const session = await auth();
   if (!session) return NextResponse.json({ error: "Non autorisé" }, { status: 401 });
 
+  const format = req.nextUrl.searchParams.get("format"); // "TCG" | "OCG" | null
+  const formatFilter = format === "TCG" || format === "OCG" ? { format } : {};
+
   const [entries, sellers] = await Promise.all([
     prisma.watchlistEntry.findMany({
-      where: { userId: session.user.id },
+      where: { userId: session.user.id, ...formatFilter },
       orderBy: { sortOrder: "asc" },
       include: {
         card: {
@@ -83,7 +87,7 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const { deck, cardId, quantity, setName, rarity } = parsed.data;
+  const { format, deck, cardId, quantity, setName, rarity } = parsed.data;
 
   const card = await prisma.card.findUnique({ where: { id: cardId } });
   if (!card) {
@@ -99,6 +103,7 @@ export async function POST(req: NextRequest) {
   const entry = await prisma.watchlistEntry.create({
     data: {
       userId: session.user.id,
+      format,
       deck,
       cardId,
       quantity,

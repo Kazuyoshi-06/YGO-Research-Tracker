@@ -1,98 +1,76 @@
 import { redirect } from "next/navigation";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
-import { TrackerClient } from "@/components/tracker/TrackerClient";
-import type { WatchlistEntry } from "@/components/tracker/types";
+import { HubClient } from "@/components/hub/HubClient";
 
 export const dynamic = "force-dynamic";
 
-export default async function Home() {
+export default async function HubPage() {
   const session = await auth();
   if (!session) redirect("/login");
 
-  const [entries, sellers] = await Promise.all([
+  const userId = session.user.id;
+
+  // Charger les stats TCG et OCG en parallèle
+  const [tcgEntries, ocgEntries] = await Promise.all([
     prisma.watchlistEntry.findMany({
-      where: { userId: session.user.id },
-      orderBy: { sortOrder: "asc" },
-      include: {
-        card: {
-          select: {
-            id: true,
-            name: true,
-            type: true,
-            frameType: true,
-            imageUrl: true,
-            hasLocalImage: true,
-          },
-        },
-      },
+      where: { userId, format: "TCG" },
+      select: { id: true, quantity: true, status: true, cardId: true },
     }),
-    prisma.seller.findMany({ orderBy: { createdAt: "asc" } }),
+    prisma.watchlistEntry.findMany({
+      where: { userId, format: "OCG" },
+      select: { id: true, quantity: true, status: true, cardId: true },
+    }),
   ]);
 
-  // Charger les prix globaux pour les cartes de la watchlist
-  const cardIds = [...new Set(entries.map((e) => e.cardId))];
-  const prices = cardIds.length > 0
-    ? await prisma.price.findMany({
-        where: { cardId: { in: cardIds } },
-        select: {
-          cardId: true,
-          sellerId: true,
-          price: true,
-          previousPrice: true,
-          previousUpdatedAt: true,
-          updatedAt: true,
-        },
-      })
-    : [];
-
-  const pricesByCardId = new Map<number, typeof prices>();
-  for (const p of prices) {
-    const arr = pricesByCardId.get(p.cardId) ?? [];
-    arr.push(p);
-    pricesByCardId.set(p.cardId, arr);
+  // Calculer la valeur estimée (meilleur prix disponible par carte)
+  async function getEstimatedValue(entries: typeof tcgEntries) {
+    if (entries.length === 0) return 0;
+    const cardIds = [...new Set(entries.map((e) => e.cardId))];
+    const prices = await prisma.price.findMany({
+      where: { cardId: { in: cardIds }, price: { not: null } },
+      select: { cardId: true, price: true },
+    });
+    // Meilleur prix par carte
+    const bestByCard = new Map<number, number>();
+    for (const p of prices) {
+      if (p.price === null) continue;
+      const current = bestByCard.get(p.cardId);
+      if (current === undefined || p.price < current) {
+        bestByCard.set(p.cardId, p.price);
+      }
+    }
+    let total = 0;
+    for (const e of entries) {
+      const best = bestByCard.get(e.cardId);
+      if (best !== undefined) total += best * e.quantity;
+    }
+    return Math.round(total * 100) / 100;
   }
 
-  // Sérialisation explicite pour Next.js (évite les objets Prisma bruts)
-  const serialized = entries.map((e) => ({
-    id: e.id,
-    deck: e.deck,
-    status: (e as Record<string, unknown>).status as string ?? "",
-    notes: (e as Record<string, unknown>).notes as string ?? "",
-    cardId: e.cardId,
-    quantity: e.quantity,
-    setName: e.setName,
-    rarity: e.rarity,
-    sortOrder: e.sortOrder,
-    createdAt: e.createdAt.toISOString(),
-    updatedAt: e.updatedAt.toISOString(),
-    card: {
-      id: e.card.id,
-      name: e.card.name,
-      type: e.card.type,
-      frameType: e.card.frameType,
-      imageUrl: e.card.imageUrl,
-      hasLocalImage: e.card.hasLocalImage,
-    },
-    prices: (pricesByCardId.get(e.cardId) ?? []).map((p) => ({
-      sellerId: p.sellerId,
-      price: p.price,
-      previousPrice: p.previousPrice,
-      previousUpdatedAt: p.previousUpdatedAt?.toISOString() ?? null,
-      updatedAt: p.updatedAt.toISOString(),
-    })),
-  }));
+  const [tcgValue, ocgValue] = await Promise.all([
+    getEstimatedValue(tcgEntries),
+    getEstimatedValue(ocgEntries),
+  ]);
 
-  const serializedSellers = sellers.map((s) => ({
-    ...s,
-    createdAt: s.createdAt.toISOString(),
-  }));
+  const tcgStats = {
+    total: tcgEntries.length,
+    toOrder: tcgEntries.filter((e) => e.status === "").length,
+    estimatedValue: tcgValue,
+  };
+
+  const ocgStats = {
+    total: ocgEntries.length,
+    toOrder: ocgEntries.filter((e) => e.status === "").length,
+    estimatedValue: ocgValue,
+  };
 
   return (
-    <TrackerClient
-      initialEntries={serialized as WatchlistEntry[]}
-      initialSellers={serializedSellers}
+    <HubClient
+      userName={session.user.name ?? session.user.email ?? ""}
       isAdmin={session.user.role === "ADMIN"}
+      tcgStats={tcgStats}
+      ocgStats={ocgStats}
     />
   );
 }

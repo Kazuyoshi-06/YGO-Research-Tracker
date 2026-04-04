@@ -27,6 +27,9 @@ model User {
   watchlistEntries WatchlistEntry[]
   priceUpdates     Price[]
   priceChangeLogs  PriceChangeLog[]
+  wavesCreated     Wave[]
+  submissions      OrderSubmission[]
+  notifications    Notification[]
 }
 
 model Account {
@@ -92,12 +95,14 @@ model Card {
   attribute    String?
   imageUrl     String    // URL distante YGOProDeck
   hasLocalImage Boolean  @default(false)
+  cardFormat   String    @default("BOTH") // "TCG" | "OCG" | "BOTH"
   updatedAt    DateTime  @updatedAt
 
-  cardSets         CardSet[]
-  watchlistEntries WatchlistEntry[]
-  prices           Price[]
-  priceChangeLogs  PriceChangeLog[]
+  cardSets            CardSet[]
+  watchlistEntries    WatchlistEntry[]
+  prices              Price[]
+  priceChangeLogs     PriceChangeLog[]
+  submissionItems     OrderSubmissionItem[]
 
   @@index([name])
 }
@@ -118,16 +123,19 @@ model CardSet {
   @@index([setName])
 }
 
-// ── Vendeurs CardMarket (pool global partagé) ────────────────────────────────
+// ── Vendeurs (pool global partagé TCG+OCG) ───────────────────────────────────
 
 model Seller {
   id              Int      @id @default(autoincrement())
   name            String   @unique
+  platform        String   @default("cardmarket") // "cardmarket" | "taobao" | "autre"
   shippingProfile String   @default("cardmarket-fr-standard")
   createdAt       DateTime @default(now())
 
-  prices          Price[]
-  priceChangeLogs PriceChangeLog[]
+  prices              Price[]
+  priceChangeLogs     PriceChangeLog[]
+  waveSellerEntries   WaveSeller[]
+  submissionItems     OrderSubmissionItem[]
 }
 
 // ── Watchlist (par utilisateur) ──────────────────────────────────────────────
@@ -135,6 +143,7 @@ model Seller {
 model WatchlistEntry {
   id        Int      @id @default(autoincrement())
   userId    String
+  format    String   @default("TCG") // "TCG" | "OCG"
   deck      String   @default("")
   cardId    Int
   quantity  Int      @default(1)
@@ -146,8 +155,9 @@ model WatchlistEntry {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
-  card Card @relation(fields: [cardId], references: [id])
+  user            User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  card            Card                  @relation(fields: [cardId], references: [id])
+  submissionItems OrderSubmissionItem[]
 
   @@index([userId])
   @@index([cardId])
@@ -189,4 +199,97 @@ model PriceChangeLog {
   card      Card   @relation(fields: [cardId], references: [id], onDelete: Cascade)
   seller    Seller @relation(fields: [sellerId], references: [id], onDelete: Cascade)
   changedBy User   @relation(fields: [changedById], references: [id], onDelete: Cascade)
+}
+
+// ── Vagues de commande groupée ───────────────────────────────────────────────
+
+// status : "open" | "frozen" | "ordered" | "delivered"
+model Wave {
+  id          Int      @id @default(autoincrement())
+  name        String
+  status      String   @default("open")
+  deadline    DateTime?
+  createdAt   DateTime @default(now())
+  createdById String
+
+  createdBy   User              @relation(fields: [createdById], references: [id])
+  sellers     WaveSeller[]
+  submissions OrderSubmission[]
+  notifications Notification[]
+
+  @@index([status])
+}
+
+// Vendeurs désignés par l'admin pour une vague (table pivot)
+model WaveSeller {
+  waveId   Int
+  sellerId Int
+
+  wave   Wave   @relation(fields: [waveId], references: [id], onDelete: Cascade)
+  seller Seller @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+
+  @@id([waveId, sellerId])
+}
+
+// Soumission d'un user pour une vague
+// status : "draft" | "submitted" | "confirmed" | "cancelled"
+model OrderSubmission {
+  id          Int       @id @default(autoincrement())
+  waveId      Int
+  userId      String
+  status      String    @default("submitted")
+  submittedAt DateTime  @default(now())
+  confirmedAt DateTime?
+
+  wave  Wave                  @relation(fields: [waveId], references: [id], onDelete: Cascade)
+  user  User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  items OrderSubmissionItem[]
+
+  @@unique([waveId, userId])
+  @@index([waveId])
+  @@index([userId])
+}
+
+// Snapshot d'une ligne watchlist au moment de la soumission
+model OrderSubmissionItem {
+  id               Int     @id @default(autoincrement())
+  submissionId     Int
+  watchlistEntryId Int
+  cardId           Int
+  cardName         String
+  setName          String  @default("")
+  rarity           String  @default("")
+  quantity         Int     @default(1)
+  preferredSellerId Int?
+  snapshotPrice    Float?  // prix capturé au moment de la soumission
+
+  submission     OrderSubmission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+  watchlistEntry WatchlistEntry  @relation(fields: [watchlistEntryId], references: [id], onDelete: Cascade)
+  card           Card            @relation(fields: [cardId], references: [id])
+  preferredSeller Seller?        @relation(fields: [preferredSellerId], references: [id], onDelete: SetNull)
+
+  @@index([submissionId])
+  @@index([watchlistEntryId])
+}
+
+// ── Notifications in-app ─────────────────────────────────────────────────────
+
+// type : "wave_open" | "wave_frozen" | "wave_ordered" | "wave_delivered"
+//        | "submission_received"
+model Notification {
+  id        Int      @id @default(autoincrement())
+  userId    String
+  type      String
+  title     String
+  body      String   @default("")
+  payload   String   @default("{}") // JSON sérialisé
+  waveId    Int?
+  readAt    DateTime?
+  createdAt DateTime @default(now())
+
+  user User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  wave Wave? @relation(fields: [waveId], references: [id], onDelete: SetNull)
+
+  @@index([userId, readAt])
+  @@index([waveId])
 }

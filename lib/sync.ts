@@ -5,7 +5,7 @@
 
 import { prisma } from "./prisma";
 
-const API_URL = "https://db.ygoprodeck.com/api/v7/cardinfo.php?misc=yes";
+const API_URL = "https://db.ygoprodeck.com/api/v7/cardinfo.php?misc=yes&format=All";
 const BATCH_SIZE = 300;
 
 interface ApiCardSet {
@@ -13,6 +13,11 @@ interface ApiCardSet {
   set_code: string;
   set_rarity: string;
   set_rarity_code: string;
+}
+
+interface ApiMiscInfo {
+  tcg_date?: string;
+  ocg_date?: string;
 }
 
 interface ApiCard {
@@ -28,6 +33,16 @@ interface ApiCard {
   attribute?: string;
   card_sets?: ApiCardSet[];
   card_images?: Array<{ id: number; image_url: string }>;
+  misc_info?: ApiMiscInfo[];
+}
+
+function deriveCardFormat(card: ApiCard): string {
+  const misc = card.misc_info?.[0];
+  const hasTcg = !!misc?.tcg_date;
+  const hasOcg = !!misc?.ocg_date;
+  if (hasTcg && hasOcg) return "BOTH";
+  if (hasOcg) return "OCG";
+  return "TCG"; // default — TCG ou inconnu
 }
 
 function chunk<T>(arr: T[], size: number): T[][] {
@@ -64,6 +79,7 @@ export async function syncYGOCards(): Promise<{
             race: card.race ?? "",
             attribute: card.attribute ?? null,
             imageUrl: card.card_images?.[0]?.image_url ?? "",
+            cardFormat: deriveCardFormat(card),
           },
           create: {
             id: card.id,
@@ -78,6 +94,7 @@ export async function syncYGOCards(): Promise<{
             attribute: card.attribute ?? null,
             imageUrl: card.card_images?.[0]?.image_url ?? "",
             hasLocalImage: false,
+            cardFormat: deriveCardFormat(card),
           },
         })
       )

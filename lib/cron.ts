@@ -5,6 +5,7 @@
 
 import cron from "node-cron";
 import { syncYGOCards } from "./sync";
+import { sendDeadlineReminders } from "./reminders";
 
 // Guard contre les double-démarrages (hot-reload dev)
 const g = globalThis as { __ygocronstared?: boolean };
@@ -25,6 +26,17 @@ export function startCronJob() {
       console.error("[cron] ❌ Sync échouée :", err);
     }
   });
+
+  // Toutes les heures — vérifier les deadlines < 48h et envoyer des rappels
+  cron.schedule("0 * * * *", async () => {
+    try {
+      await sendDeadlineReminders();
+    } catch (err) {
+      console.error("[reminders] ❌ Erreur :", err);
+    }
+  });
+
+  console.log("[cron] ✓ Rappels deadline planifiés — vérification toutes les heures");
 
   // Calcul de la prochaine exécution pour le log de démarrage
   const now = new Date();

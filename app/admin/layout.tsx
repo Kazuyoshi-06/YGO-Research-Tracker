@@ -29,6 +29,12 @@ export default async function AdminLayout({ children }: { children: React.ReactN
           >
             Prix modifiés
           </Link>
+          <Link
+            href="/admin/waves"
+            className="px-3 py-1.5 rounded-md text-xs text-muted-foreground hover:text-foreground hover:bg-surface-raised transition-colors"
+          >
+            Vagues
+          </Link>
         </nav>
       </header>
       <main className="flex-1 p-6">{children}</main>

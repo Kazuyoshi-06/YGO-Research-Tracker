@@ -19,6 +19,8 @@ import { ImportDialog } from "./ImportDialog";
 import { PurchasePlan } from "./PurchasePlan";
 import { Dashboard } from "./Dashboard";
 import { UserMenu } from "./UserMenu";
+import { NotificationBell } from "./NotificationBell";
+import { WaveBanner } from "./WaveBanner";
 import type { WatchlistEntry, Seller, CardInfo, RarityOption } from "./types";
 
 // ── Helper : calcule les seller IDs au meilleur prix sur une ligne ────────
@@ -42,11 +44,31 @@ function EditionSelect({
   cardId,
   value,
   onChange,
+  isOcg = false,
 }: {
   cardId: number;
   value: string | null;
   onChange: (v: string | null) => void;
+  isOcg?: boolean;
 }) {
+  // Mode OCG : saisie libre (les sets JP/CN ne sont pas en base)
+  const [draft, setDraft] = useState(value ?? "");
+  useEffect(() => { setDraft(value ?? ""); }, [value]);
+
+  if (isOcg) {
+    return (
+      <input
+        type="text"
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={() => onChange(draft.trim() || null)}
+        onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
+        placeholder="Ex: QCRO-JP001"
+        className="w-full h-7 px-2 text-xs bg-transparent border-0 text-foreground/90 placeholder:text-muted-foreground/40 focus:outline-none focus:ring-1 focus:ring-gold/30 rounded"
+      />
+    );
+  }
+
   const [options, setOptions] = useState<string[]>([]);
   const [loaded, setLoaded] = useState(false);
 
@@ -88,12 +110,32 @@ function RaritySelect({
   setName,
   value,
   onChange,
+  isOcg = false,
 }: {
   cardId: number;
   setName: string | null;
   value: string | null;
   onChange: (v: string | null) => void;
+  isOcg?: boolean;
 }) {
+  // Mode OCG : saisie libre
+  const [draft, setDraft] = useState(value ?? "");
+  useEffect(() => { setDraft(value ?? ""); }, [value]);
+
+  if (isOcg) {
+    return (
+      <input
+        type="text"
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={() => onChange(draft.trim() || null)}
+        onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
+        placeholder="Ex: QCSR"
+        className="w-full h-7 px-2 text-xs bg-transparent border-0 text-foreground/90 placeholder:text-muted-foreground/40 focus:outline-none focus:ring-1 focus:ring-gold/30 rounded"
+      />
+    );
+  }
+
   const [options, setOptions] = useState<RarityOption[]>([]);
   const [loaded, setLoaded] = useState(false);
 
@@ -152,6 +194,7 @@ const PriceCell = forwardRef<PriceCellHandle, {
   previousUpdatedAt?: string | null;
   onSave: (v: number | null) => void;
   isBest?: boolean;
+  currency?: string;
   onNavigate?: (dir: "next" | "prev") => void;
 }>(function PriceCell({
   price,
@@ -159,6 +202,7 @@ const PriceCell = forwardRef<PriceCellHandle, {
   previousUpdatedAt = null,
   onSave,
   isBest = false,
+  currency = "€",
   onNavigate,
 }, ref) {
   const [editing, setEditing] = useState(false);
@@ -227,8 +271,8 @@ const PriceCell = forwardRef<PriceCellHandle, {
     >
       {price != null ? (
         <span className="inline-flex items-baseline gap-1 justify-end">
-          <span className={cn("text-[10px]", isBest ? "text-emerald-500" : "text-muted-foreground")}>€</span>
-          {price.toFixed(2)}
+          <span className={cn("text-[10px]", isBest ? "text-emerald-500" : "text-muted-foreground")}>{currency}</span>
+          {currency === "¥" ? Math.round(price).toLocaleString() : price.toFixed(2)}
           {showVariation && (
             <span className={cn("text-[9px] leading-none font-bold", isDown ? "text-emerald-400" : "text-amber-400")}>
               {isDown ? "↓" : "↑"}
@@ -248,7 +292,7 @@ const PriceCell = forwardRef<PriceCellHandle, {
                          pointer-events-none z-20">
           <span className="text-muted-foreground/60">Avant : </span>
           <span className={cn("font-medium tabular-nums", isDown ? "text-amber-400/80" : "text-emerald-400/80")}>
-            €{previousPrice!.toFixed(2)}
+            {currency}{currency === "¥" ? Math.round(previousPrice!).toLocaleString() : previousPrice!.toFixed(2)}
           </span>
           {previousUpdatedAt && (
             <span className="text-muted-foreground/50 ml-1">· {formatDaysAgo(previousUpdatedAt)}</span>
@@ -308,6 +352,7 @@ type Status = typeof STATUSES[number];
 
 const STATUS_CONFIG: Record<string, { label: string; classes: string }> = {
   "À commander": { label: "À commander", classes: "bg-blue-900/40 text-blue-300 border-blue-700/50" },
+  "Soumis":      { label: "Soumis",      classes: "bg-violet-900/40 text-violet-300 border-violet-700/50" },
   "Commandé":    { label: "Commandé",    classes: "bg-amber-900/40 text-amber-300 border-amber-700/50" },
   "Reçu":        { label: "Reçu",        classes: "bg-emerald-900/40 text-emerald-300 border-emerald-700/50" },
 };
@@ -328,12 +373,15 @@ function StatusBadge({ status, onClick }: { status: string; onClick: () => void 
       </button>
     );
   }
+  const locked = status === "Soumis";
   return (
     <button
       onClick={onClick}
-      title="Changer le statut"
+      title={locked ? "Statut verrouillé pendant la soumission" : "Changer le statut"}
+      disabled={locked}
       className={cn(
-        "text-[10px] font-medium px-2 py-1 rounded-md border leading-none transition-colors hover:opacity-90",
+        "text-[10px] font-medium px-2 py-1 rounded-md border leading-none transition-colors",
+        locked ? "cursor-default opacity-80" : "hover:opacity-90",
         cfg.classes
       )}
     >
@@ -359,6 +407,7 @@ function SortIndicator({ column, sort }: { column: "name" | "qty" | number; sort
 // ── Composant principal ───────────────────────────────────────────────────
 
 interface TrackerClientProps {
+  format?: "TCG" | "OCG";
   initialEntries: WatchlistEntry[];
   initialSellers: Seller[];
   isAdmin?: boolean;
@@ -379,7 +428,10 @@ async function readApiError(response: Response, fallback: string) {
   }
 }
 
-export function TrackerClient({ initialEntries, initialSellers, isAdmin = false }: TrackerClientProps) {
+export function TrackerClient({ format = "TCG", initialEntries, initialSellers, isAdmin = false }: TrackerClientProps) {
+  const isOcg = format === "OCG";
+  const currency = isOcg ? "¥" : "€";
+
   const [entries, setEntries] = useState<WatchlistEntry[]>(initialEntries);
   const [sellers, setSellers] = useState<Seller[]>(initialSellers);
   const [uiError, setUiError] = useState("");
@@ -495,7 +547,7 @@ export function TrackerClient({ initialEntries, initialSellers, isAdmin = false 
       },
       {
         label: "Estimé",
-        value: `€${totalEstimated.toFixed(2)}`,
+        value: isOcg ? `¥${Math.round(totalEstimated).toLocaleString()}` : `€${totalEstimated.toFixed(2)}`,
         tone: "text-foreground/92",
       },
       {
@@ -592,7 +644,7 @@ export function TrackerClient({ initialEntries, initialSellers, isAdmin = false 
     const res = await fetch("/api/watchlist", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ deck, cardId, quantity }),
+      body: JSON.stringify({ format, deck, cardId, quantity }),
     });
 
     if (!res.ok) {
@@ -639,6 +691,7 @@ export function TrackerClient({ initialEntries, initialSellers, isAdmin = false 
   }, []);
 
   const cycleStatus = useCallback((id: number, current: string) => {
+    if (current === "Soumis") return; // locked while in active wave submission
     const idx = STATUSES.indexOf(current as Status);
     const next = STATUSES[(idx + 1) % STATUSES.length];
     updateEntry(id, { status: next }).catch((error) => {
@@ -875,7 +928,7 @@ export function TrackerClient({ initialEntries, initialSellers, isAdmin = false 
           return p?.price != null ? p.price.toFixed(2) : "";
         }),
         deal
-          ? `${deal.sellerName}${deal.saving != null && deal.saving > 0 ? ` (-€${deal.saving.toFixed(2)})` : ""}`
+          ? `${deal.sellerName}${deal.saving != null && deal.saving > 0 ? ` (-${currency}${isOcg ? Math.round(deal.saving) : deal.saving.toFixed(2)})` : ""}`
           : "",
       ];
     });
@@ -958,6 +1011,7 @@ export function TrackerClient({ initialEntries, initialSellers, isAdmin = false 
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
+            format,
             cardId: e.cardId,
             deck: e.deck ?? "",
             quantity: e.quantity ?? 1,
@@ -1072,10 +1126,12 @@ export function TrackerClient({ initialEntries, initialSellers, isAdmin = false 
           <div className="flex items-center gap-1 px-2 min-w-0">
             <span className="text-sm font-semibold text-foreground/95 truncate leading-tight flex-1">{entry.card.name}</span>
             <a
-              href={`https://www.cardmarket.com/fr/YuGiOh/Products/Singles?searchString=${encodeURIComponent(entry.card.name)}${entry.setName ? `&expansionName=${encodeURIComponent(entry.setName)}` : ""}`}
+              href={isOcg
+                ? `https://s.taobao.com/search?q=${encodeURIComponent(entry.card.name + (entry.setName ? ` ${entry.setName}` : ""))}`
+                : `https://www.cardmarket.com/fr/YuGiOh/Products/Singles?searchString=${encodeURIComponent(entry.card.name)}${entry.setName ? `&expansionName=${encodeURIComponent(entry.setName)}` : ""}`}
               target="_blank"
               rel="noopener noreferrer"
-              title="Rechercher sur CardMarket"
+              title={isOcg ? "Rechercher sur Taobao" : "Rechercher sur CardMarket"}
               onClick={(e) => e.stopPropagation()}
               className="flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground/50 hover:text-gold p-0.5 rounded"
             >
@@ -1156,6 +1212,7 @@ export function TrackerClient({ initialEntries, initialSellers, isAdmin = false 
         <EditionSelect
           cardId={entry.cardId}
           value={entry.setName}
+          isOcg={isOcg}
           onChange={(v) => {
             updateEntry(entry.id, { setName: v, rarity: null }).catch((error) => {
               showError(error, "Erreur lors de la mise à jour");
@@ -1169,6 +1226,7 @@ export function TrackerClient({ initialEntries, initialSellers, isAdmin = false 
           cardId={entry.cardId}
           setName={entry.setName}
           value={entry.rarity}
+          isOcg={isOcg}
           onChange={(v) => {
             updateEntry(entry.id, { rarity: v }).catch((error) => {
               showError(error, "Erreur lors de la mise à jour");
@@ -1207,6 +1265,7 @@ export function TrackerClient({ initialEntries, initialSellers, isAdmin = false 
                 previousPrice={priceData?.previousPrice ?? null}
                 previousUpdatedAt={priceData?.previousUpdatedAt ?? null}
                 isBest={bestIds.has(seller.id)}
+                currency={currency}
                 onSave={(v) => {
                   updatePrice(entry.cardId, seller.id, v).catch((error) => {
                     showError(error, "Erreur lors de la mise à jour du prix");
@@ -1227,7 +1286,7 @@ export function TrackerClient({ initialEntries, initialSellers, isAdmin = false 
               <div className="flex flex-col gap-0.5">
                 <span className="text-xs text-foreground/80 truncate font-mono">{deal.sellerName}</span>
                 {deal.saving != null && deal.saving > 0 && (
-                  <span className="text-[10px] text-emerald-500/70 tabular-nums">−€{deal.saving.toFixed(2)}</span>
+                  <span className="text-[10px] text-emerald-500/70 tabular-nums">−{currency}{isOcg ? Math.round(deal.saving) : deal.saving.toFixed(2)}</span>
                 )}
               </div>
             ) : (
@@ -1246,7 +1305,7 @@ export function TrackerClient({ initialEntries, initialSellers, isAdmin = false 
       {/* ── Header ──────────────────────────────────────────────────────── */}
       <header className="flex-none border-b border-gold/10 bg-[linear-gradient(180deg,rgba(19,20,24,0.97),rgba(13,14,18,0.98))] px-4 py-3 backdrop-blur-sm fade-in-up">
         <div className="hidden items-center gap-4 lg:flex">
-          <div className="min-w-0 flex-shrink-0">
+          <div className="flex min-w-0 flex-shrink-0 items-center gap-2">
             <button
               onClick={() => setView("table")}
               className="rounded-2xl outline-none transition-opacity hover:opacity-95 focus-visible:ring-2 focus-visible:ring-gold/30"
@@ -1254,6 +1313,32 @@ export function TrackerClient({ initialEntries, initialSellers, isAdmin = false 
             >
               <AppLogo active={view === "table"} />
             </button>
+
+            {/* Switcher TCG / OCG */}
+            <div className="inline-flex items-center gap-0.5 rounded-full border border-border/50 bg-card/50 p-0.5">
+              <Link
+                href="/tracker/tcg"
+                className={cn(
+                  "flex h-6 items-center rounded-full px-2.5 text-[11px] font-semibold tracking-wide transition-colors",
+                  !isOcg
+                    ? "bg-gold/15 text-gold ring-1 ring-gold/25"
+                    : "text-muted-foreground/60 hover:text-foreground"
+                )}
+              >
+                TCG
+              </Link>
+              <Link
+                href="/tracker/ocg"
+                className={cn(
+                  "flex h-6 items-center rounded-full px-2.5 text-[11px] font-semibold tracking-wide transition-colors",
+                  isOcg
+                    ? "bg-red-500/15 text-red-400 ring-1 ring-red-500/25"
+                    : "text-muted-foreground/60 hover:text-foreground"
+                )}
+              >
+                OCG
+              </Link>
+            </div>
           </div>
 
           <div className="flex min-w-0 flex-1 items-center justify-center">
@@ -1359,21 +1444,53 @@ export function TrackerClient({ initialEntries, initialSellers, isAdmin = false 
               Vendeurs
             </button>
 
+            <NotificationBell />
             <UserMenu isAdmin={isAdmin} />
           </div>
         </div>
 
         <div className="space-y-3 lg:hidden">
           <div className="flex items-center justify-between gap-3">
-            <button
-              onClick={() => setView("table")}
-              className="rounded-2xl outline-none transition-opacity hover:opacity-95 focus-visible:ring-2 focus-visible:ring-gold/30"
-              aria-label="Revenir au tableau"
-            >
-              <AppLogo active={view === "table"} className="pr-4" />
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setView("table")}
+                className="rounded-2xl outline-none transition-opacity hover:opacity-95 focus-visible:ring-2 focus-visible:ring-gold/30"
+                aria-label="Revenir au tableau"
+              >
+                <AppLogo active={view === "table"} />
+              </button>
 
-            <UserMenu isAdmin={isAdmin} />
+              {/* Switcher TCG / OCG — mobile */}
+              <div className="inline-flex items-center gap-0.5 rounded-full border border-border/50 bg-card/50 p-0.5">
+                <Link
+                  href="/tracker/tcg"
+                  className={cn(
+                    "flex h-6 items-center rounded-full px-2.5 text-[11px] font-semibold tracking-wide transition-colors",
+                    !isOcg
+                      ? "bg-gold/15 text-gold ring-1 ring-gold/25"
+                      : "text-muted-foreground/60 hover:text-foreground"
+                  )}
+                >
+                  TCG
+                </Link>
+                <Link
+                  href="/tracker/ocg"
+                  className={cn(
+                    "flex h-6 items-center rounded-full px-2.5 text-[11px] font-semibold tracking-wide transition-colors",
+                    isOcg
+                      ? "bg-red-500/15 text-red-400 ring-1 ring-red-500/25"
+                      : "text-muted-foreground/60 hover:text-foreground"
+                  )}
+                >
+                  OCG
+                </Link>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <NotificationBell />
+              <UserMenu isAdmin={isAdmin} />
+            </div>
           </div>
 
           <div className="flex gap-2 overflow-x-auto pb-1 no-scrollbar">
@@ -1542,6 +1659,13 @@ export function TrackerClient({ initialEntries, initialSellers, isAdmin = false 
           </button>
         </div>
       )}
+
+      {/* ── Bandeau vague active ────────────────────────────────────────── */}
+      <WaveBanner
+        entries={entries}
+        sellers={sellers}
+        onEntriesChange={setEntries}
+      />
 
       {/* ── Vue dashboard ───────────────────────────────────────────────── */}
       {view === "dashboard" && (
@@ -1771,11 +1895,13 @@ export function TrackerClient({ initialEntries, initialSellers, isAdmin = false 
                 <th key={s.id} className={`${thClass} w-[110px] text-right`}>
                   <div className="flex items-center justify-end gap-1.5">
                     <a
-                      href={`https://www.cardmarket.com/fr/YuGiOh/Users/${encodeURIComponent(s.name)}/Offers/Singles`}
+                      href={s.platform === "taobao"
+                        ? `https://s.taobao.com/search?q=${encodeURIComponent(s.name)}`
+                        : `https://www.cardmarket.com/fr/YuGiOh/Users/${encodeURIComponent(s.name)}/Offers/Singles`}
                       target="_blank"
                       rel="noopener noreferrer"
                       className="font-mono text-[11px] hover:text-gold transition-colors inline-flex items-center gap-1 group"
-                      title={`Voir le profil de ${s.name} sur CardMarket`}
+                      title={s.platform === "taobao" ? `Rechercher ${s.name} sur Taobao` : `Voir le profil de ${s.name} sur CardMarket`}
                     >
                       {s.name}
                       <ExternalLink className="w-2.5 h-2.5 opacity-0 group-hover:opacity-60 transition-opacity flex-shrink-0" />
@@ -1851,8 +1977,8 @@ export function TrackerClient({ initialEntries, initialSellers, isAdmin = false 
                             {s.covered > 0 ? (
                               <div className="flex flex-col items-end gap-0.5 px-2">
                                 <span className={cn("text-xs tabular-nums", isBest ? "text-gold" : "text-foreground/60")}>
-                                  <span className={cn("text-[10px] mr-0.5", isBest ? "text-gold/60" : "text-muted-foreground/40")}>€</span>
-                                  {s.total.toFixed(2)}
+                                  <span className={cn("text-[10px] mr-0.5", isBest ? "text-gold/60" : "text-muted-foreground/40")}>{currency}</span>
+                                  {isOcg ? Math.round(s.total).toLocaleString() : s.total.toFixed(2)}
                                 </span>
                                 <span className={cn("text-[10px] tabular-nums", isBest ? "text-gold/60" : "text-muted-foreground/30")}>
                                   {s.covered}/{groupEntries.length}{isBest && <span className="ml-1">★</span>}
@@ -1903,6 +2029,7 @@ export function TrackerClient({ initialEntries, initialSellers, isAdmin = false 
                   <CardAutocomplete
                     value={null}
                     onChange={handlePendingCardSelect}
+                    format={format}
                     autoOpen
                   />
                 </td>
@@ -2017,8 +2144,8 @@ export function TrackerClient({ initialEntries, initialSellers, isAdmin = false 
                                 isBestCoverage ? "text-gold" : "text-foreground/80"
                               )}
                             >
-                              <span className={cn("text-[10px] mr-0.5", isBestCoverage ? "text-gold/60" : "text-muted-foreground")}>€</span>
-                              {s.total.toFixed(2)}
+                              <span className={cn("text-[10px] mr-0.5", isBestCoverage ? "text-gold/60" : "text-muted-foreground")}>{currency}</span>
+                              {isOcg ? Math.round(s.total).toLocaleString() : s.total.toFixed(2)}
                             </span>
                             <span
                               className={cn(

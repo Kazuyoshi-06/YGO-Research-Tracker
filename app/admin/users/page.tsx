@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 
 type User = {
   id: string;
@@ -94,6 +95,12 @@ export default function AdminUsersPage() {
                 </td>
                 <td className="px-4 py-3">
                   <div className="flex items-center justify-end gap-2">
+                    <Link
+                      href={`/admin/users/${user.id}/watchlist`}
+                      className="text-xs px-2 py-1 rounded border border-border/60 text-muted-foreground hover:text-foreground hover:bg-surface-overlay transition-colors"
+                    >
+                      Watchlist
+                    </Link>
                     <button
                       onClick={() => toggleBan(user)}
                       className="text-xs px-2 py-1 rounded border border-border/60 text-muted-foreground hover:text-foreground hover:bg-surface-overlay transition-colors"

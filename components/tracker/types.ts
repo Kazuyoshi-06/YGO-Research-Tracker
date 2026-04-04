@@ -17,6 +17,7 @@ export type PriceData = {
 
 export type WatchlistEntry = {
   id: number;
+  format: "TCG" | "OCG";
   deck: string;
   status: string;
   notes: string;
@@ -34,6 +35,7 @@ export type WatchlistEntry = {
 export type Seller = {
   id: number;
   name: string;
+  platform: string;
   shippingProfile: string;
   createdAt: string;
 };
